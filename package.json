@@ -2,9 +2,9 @@
   "name": "awe-server",
   "version": "0.0.1",
   "description": "",
-  "author": "",
+  "author": "Andrii Volynets",
   "private": true,
-  "license": "UNLICENSED",
+  "license": "MIT",
   "scripts": {
     "build": "nest build",
     "format": "prettier --write \"apps/**/*.ts\" \"libs/**/*.ts\"",
@@ -20,6 +20,7 @@
     "test:e2e": "jest --config ./apps/chat/main/test/jest-e2e.json"
   },
   "dependencies": {    
+    "@awe/signal-protocol-library": "workspace:0.0.1",
     "@awe/common": "workspace:0.0.1",
     "@nestjs/common": "^11.0.1",
     "@nestjs/core": "^11.0.1",
@@ -71,7 +72,8 @@
     "coverageDirectory": "./coverage",
     "testEnvironment": "node",
     "roots": [
-      "<rootDir>/apps/"
+      "<rootDir>/apps/",
+      "<rootDir>/packages/"
     ]
   }
 }
