@@ -3,12 +3,11 @@ import { INestApplication, Type, ValidationPipe, Logger, RequestMethod } from '@
 import { ConfigService } from '@nestjs/config';
 import { DocumentBuilder, SwaggerModule } from '@nestjs/swagger';
 import helmet from 'helmet';
-import compression from 'compression';
 import { config } from 'dotenv';
-import morgan from 'morgan';
+import  morgan from 'morgan';
+import compression from 'compression';
 
-// Load environment variables early
-config();
+export const loadEnv = () => config();
 
 export interface BootstrapOptions {
   port?: number;
@@ -24,6 +23,8 @@ export async function bootstrap(
   module: Type<any>,
   options: BootstrapOptions = {}
 ): Promise<INestApplication> {
+  loadEnv(); 
+
   const {
     port = process.env.PORT ? parseInt(process.env.PORT, 10) : 3000,
     logger = true,
@@ -53,7 +54,6 @@ export async function bootstrap(
   });
 
   app.use(compression());
-
 
   app.use(
     morgan('combined', {
@@ -93,14 +93,12 @@ export async function bootstrap(
   return app;
 }
 
-function enableGracefulShutdown(app: INestApplication) {
+export function enableGracefulShutdown(app: INestApplication) {
   const logger = new Logger('Shutdown');
-
   process.on('SIGTERM', async () => {
     logger.log('Received SIGTERM, shutting down gracefully...');
     await app.close();
     process.exit(0);
-
   });
   process.on('SIGINT', async () => {
     logger.log('Received SIGINT, shutting down gracefully...');
