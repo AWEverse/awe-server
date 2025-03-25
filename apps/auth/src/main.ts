@@ -1,8 +1,10 @@
-import { NestFactory } from '@nestjs/core';
 import { AuthModule } from './auth.module';
+import { runBootstrap } from '@awe/common';
 
-async function bootstrap() {
-  const app = await NestFactory.create(AuthModule);
-  await app.listen(process.env.port ?? 3000);
-}
-bootstrap();
+runBootstrap(AuthModule, {
+  port: 3000,
+  swaggerEnabled: false,
+  beforeStart: (app) => {
+    console.log('Auth app initializing...', app);
+  },
+});

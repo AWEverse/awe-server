@@ -1,56 +1,71 @@
-# compiled output
-/dist
-/node_modules
-/build
-
-# Logs
-logs
+# Node.js and npm/yarn/pnpm
+node_modules/
 *.log
 npm-debug.log*
-pnpm-debug.log*
 yarn-debug.log*
 yarn-error.log*
-lerna-debug.log*
+pnpm-debug.log*
 
-# OS
-.DS_Store
+# Build Output
+dist/
+build/
+*.tsbuildinfo
 
-# Tests
-/coverage
-/.nyc_output
-
-# IDEs and editors
-/.idea
-.project
-.classpath
-.c9/
-*.launch
-.settings/
-*.sublime-workspace
-
-# IDE - VSCode
-.vscode/*
-!.vscode/settings.json
-!.vscode/tasks.json
-!.vscode/launch.json
-!.vscode/extensions.json
-
-# dotenv environment variable files
+# Environment Variables
 .env
+.env.local
 .env.development
 .env.test
 .env.production
-.env
 
-# temp directory
-.temp
-.tmp
+# Dependency Lockfiles (optional, include if you don’t want them tracked)
+# package-lock.json
+# yarn.lock
+# pnpm-lock.yaml
 
-# Runtime data
-pids
+# Editor and IDE Files
+.vscode/
+.idea/
+*.sublime-project
+*.sublime-workspace
+
+# OS Generated Files
+.DS_Store
+Thumbs.db
+
+# Test Coverage and Reports
+coverage/
+*.lcov
+
+# Logs
+logs/
+*.log.*
+
+# Temporary Files
+*.tmp
+*.bak
+*.swp
+*~
+
+# Monorepo-Specific Build Artifacts
+apps/*/dist/
+apps/*/build/
+apps/*/*.tsbuildinfo
+
+# NestJS-Specific
+apps/*/test/*.js
+apps/*/test/*.js.map
+apps/*/src/**/*.js  # Exclude compiled JS if using TypeScript
+apps/*/src/**/*.js.map
+
+# Optional: Exclude Specific App Artifacts
+apps/auth/dist/
+apps/chat/dist/
+apps/dialogs/dist/
+apps/forum/dist/
+apps/media/dist/
+
+# Miscellaneous
 *.pid
 *.seed
 *.pid.lock
-
-# Diagnostic reports (https://nodejs.org/api/report.html)
-report.[0-9]*.[0-9]*.[0-9]*.[0-9]*.json
