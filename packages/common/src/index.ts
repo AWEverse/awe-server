@@ -1,115 +1,176 @@
 import { NestFactory } from '@nestjs/core';
-import { INestApplication, Type, ValidationPipe, Logger, RequestMethod } from '@nestjs/common';
+import { 
+  INestApplication, 
+  Type, 
+  ValidationPipe, 
+  Logger, 
+  RequestMethod, 
+  VersioningType 
+} from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { DocumentBuilder, SwaggerModule } from '@nestjs/swagger';
 import helmet from 'helmet';
 import { config } from 'dotenv';
-import  morgan from 'morgan';
 import compression from 'compression';
-
-export const loadEnv = () => config();
+import { readFileSync } from 'fs';
+import cluster from 'node:cluster';
+import * as os from 'os';
+import * as winston from 'winston';
 
 export interface BootstrapOptions {
   port?: number;
-  logger?: boolean;
+  logger?: winston.Logger;
   swaggerPath?: string;
-  swaggerEnabled?: boolean;
   globalPrefix?: string;
-  beforeStart?: (app: INestApplication) => Promise<void> | void;
-  afterStart?: (app: INestApplication) => Promise<void> | void;
+  beforeStart?: (app: INestApplication) => Promise<void>;
+  afterStart?: (app: INestApplication) => Promise<void>;
+  ssl?: { cert: string; key: string };
+  clustering?: boolean;
+  healthCheckPath?: string;
+  rateLimit?: { ttl: number; limit: number; message?: string };
+  cors?: { origin?: string | string[] | boolean; methods?: string[]; credentials?: boolean };
 }
 
 export async function bootstrap(
   module: Type<any>,
   options: BootstrapOptions = {}
 ): Promise<INestApplication> {
-  loadEnv(); 
+  config();
+  const configService = new ConfigService();
 
   const {
-    port = process.env.PORT ? parseInt(process.env.PORT, 10) : 3000,
-    logger = true,
+    port = configService.get<number>('PORT', 3000),
+    logger = createDefaultLogger(),
     swaggerPath = '/api-docs',
-    swaggerEnabled = process.env.NODE_ENV !== 'production',
     globalPrefix = '/api',
     beforeStart,
     afterStart,
+    ssl,
+    clustering = false,
+    healthCheckPath = '/health',
+    rateLimit = { ttl: 60, limit: 100 },
+    cors = {},
   } = options;
 
-  const app = await NestFactory.create(module, {
-    logger: logger ? ['error', 'warn', 'log', 'debug'] : false,
-  });
+  const isProduction = configService.get('NODE_ENV') === 'production';
 
-  const configService = app.get(ConfigService);
-  const appName = configService.get<string>('APP_NAME', module.name || 'NestApp');
+  try {
+    const app = await NestFactory.create(module, {
+      logger,
+      httpsOptions: ssl ? {
+        cert: readFileSync(ssl.cert),
+        key: readFileSync(ssl.key),
+      } : undefined,
+    });
 
-  app.setGlobalPrefix(globalPrefix, {
-    exclude: [{ path: '', method: RequestMethod.GET }],
-  });
+    app.use(helmet({ hsts: { maxAge: 31536000 } }));
+    app.use(compression({ threshold: 1024 }));
 
-  app.use(helmet());
-  app.enableCors({
-    origin: configService.get<string>('CORS_ORIGIN', '*'),
-    methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH'],
-    credentials: true,
-  });
+    app.enableCors({
+      origin: cors.origin ?? (isProduction ? false : true),
+      methods: cors.methods || ['GET', 'POST', 'PUT', 'DELETE'],
+      credentials: cors.credentials ?? true,
+    });
 
-  app.use(compression());
-
-  app.use(
-    morgan('combined', {
-      stream: { write: (message: string) => Logger.log(message.trim(), 'HTTP') },
-    })
-  );
-
-  app.useGlobalPipes(
-    new ValidationPipe({
-      transform: true,
+    app.setGlobalPrefix(globalPrefix, {
+      exclude: [{ path: healthCheckPath, method: RequestMethod.GET }],
+    });
+    app.enableVersioning({ type: VersioningType.URI });
+    app.useGlobalPipes(new ValidationPipe({ 
+      transform: true, 
       whitelist: true,
-      forbidNonWhitelisted: true,
-    })
-  );
+    }));
 
-  if (swaggerEnabled) {
-    const swaggerConfig = new DocumentBuilder()
-      .setTitle(`${appName} API`)
-      .setDescription(`API documentation for ${appName}`)
-      .setVersion('1.0')
-      .addBearerAuth()
-      .build();
-    const document = SwaggerModule.createDocument(app, swaggerConfig);
-    SwaggerModule.setup(swaggerPath, app, document);
-    Logger.log(`Swagger UI available at ${globalPrefix}${swaggerPath}`, 'Bootstrap');
+    if (!isProduction) {
+      const swaggerConfig = new DocumentBuilder()
+        .setTitle(configService.get('APP_NAME', 'API'))
+        .setVersion('1.0')
+        .addBearerAuth()
+        .build();
+      const document = SwaggerModule.createDocument(app, swaggerConfig);
+      SwaggerModule.setup(swaggerPath, app, document);
+    }
+
+    app.getHttpAdapter().get(healthCheckPath, (_req, res) =>
+      res.status(200).json({
+        status: 'ok',
+        timestamp: new Date().toISOString(),
+        uptime: process.uptime(),
+      })
+    );
+
+    if (beforeStart) await beforeStart(app);
+    await app.listen(port);
+    if (afterStart) await afterStart(app);
+
+    Logger.log(`Application running on: ${await app.getUrl()}`, 'Bootstrap');
+    enableGracefulShutdown(app);
+
+    return app;
+  } catch (error) {
+    Logger.error('Bootstrap failed:', error);
+    throw error;
   }
-
-  if (beforeStart) await beforeStart(app);
-
-  await app.listen(port);
-  Logger.log(`Application "${appName}" is running on: ${await app.getUrl()}`, 'Bootstrap');
-
-  enableGracefulShutdown(app);
-
-  if (afterStart) await afterStart(app);
-
-  return app;
 }
 
-export function enableGracefulShutdown(app: INestApplication) {
-  const logger = new Logger('Shutdown');
-  process.on('SIGTERM', async () => {
-    logger.log('Received SIGTERM, shutting down gracefully...');
-    await app.close();
-    process.exit(0);
-  });
-  process.on('SIGINT', async () => {
-    logger.log('Received SIGINT, shutting down gracefully...');
-    await app.close();
-    process.exit(0);
-  });
+export async function runBootstrap(module: Type<any>, options: BootstrapOptions = {}) {
+  const logger = options.logger || createDefaultLogger();
+
+  if (options.clustering && cluster.isPrimary) {
+    const numWorkers = Math.min(os.cpus().length, 4);
+    logger.log(`Starting ${numWorkers} workers...`, 'Bootstrap');
+
+    for (let i = 0; i < numWorkers; i++) {
+      cluster.fork();
+    }
+
+    cluster.on('exit', (worker, code) => {
+      logger.warn(`Worker ${worker.process.pid} died (code: ${code}). Restarting...`);
+      cluster.fork();
+    });
+  } else {
+    await bootstrap(module, options).catch((err) => {
+      logger.error('Application failed to start:', err);
+      process.exit(1);
+    });
+  }
 }
 
-export function runBootstrap(module: Type<any>, options?: BootstrapOptions) {
-  bootstrap(module, options).catch((err) => {
-    Logger.error('Bootstrap failed:', err, 'Bootstrap');
+function enableGracefulShutdown(app: INestApplication) {
+  const logger = app.get(Logger);
+  const shutdown = async (signal: string) => {
+    logger.log(`Received ${signal}. Shutting down...`);
+    await app.close().catch((err) => logger.error('Shutdown error:', err));
+    process.exit(0);
+  };
+
+  process.on('SIGTERM', () => shutdown('SIGTERM'));
+  process.on('SIGINT', () => shutdown('SIGINT'));
+  process.on('uncaughtException', (err) => {
+    logger.error('Uncaught Exception:', err);
     process.exit(1);
+  });
+}
+
+function createDefaultLogger(): winston.Logger {
+  return winston.createLogger({
+    level: process.env.NODE_ENV === 'production' ? 'info' : 'debug',
+    format: winston.format.combine(
+      winston.format.timestamp(),
+      winston.format.json()
+    ),
+    transports: [
+      new winston.transports.Console({
+        format: winston.format.combine(
+          winston.format.colorize(),
+          winston.format.simple()
+        ),
+      }),
+      new winston.transports.File({ 
+        filename: 'logs/error.log', 
+        level: 'error',
+        maxsize: 5242880,
+      }),
+    ],
   });
 }

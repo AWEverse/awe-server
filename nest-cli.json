@@ -8,15 +8,15 @@
     "tsConfigPath": "apps/chat/main/tsconfig.app.json"
   },
   "monorepo": true,
-  "root": "apps/chat/main",
+  "root": "apps/main",
   "projects": {
     "auth": {
       "type": "application",
-      "root": "apps/chat/auth",
+      "root": "apps/auth",
       "entryFile": "main",
-      "sourceRoot": "apps/chat/auth/src",
+      "sourceRoot": "apps/auth/src",
       "compilerOptions": {
-        "tsConfigPath": "apps/chat/auth/tsconfig.app.json"
+        "tsConfigPath": "apps/auth/tsconfig.app.json"
       }
     },
     "chat": {
@@ -44,15 +44,6 @@
       "sourceRoot": "apps/forum/src",
       "compilerOptions": {
         "tsConfigPath": "apps/forum/tsconfig.app.json"
-      }
-    },
-    "main": {
-      "type": "application",
-      "root": "apps/chat/main",
-      "entryFile": "main",
-      "sourceRoot": "apps/chat/main/src",
-      "compilerOptions": {
-        "tsConfigPath": "apps/chat/main/tsconfig.app.json"
       }
     },
     "media": {
