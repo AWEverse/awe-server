@@ -1,0 +1,89 @@
+
+model PrivateChat {
+  chat_id    BigInt    @id @default(autoincrement())
+  folder_id  BigInt
+  created_at DateTime  @default(now())
+  updated_at DateTime  @updatedAt
+  folder     ChatFolder @relation(fields: [folder_id], references: [folder_id], onDelete: Cascade)
+  members    PrivateMember[]
+  messages   PrivateMessage[]
+  attachments PrivateMessageAttachment[]
+
+  @@index([folder_id])
+}
+
+model PrivateMember {
+  member_id  BigInt    @id @default(autoincrement())
+  user_id    BigInt
+  chat_id    BigInt
+  created_at DateTime  @default(now())
+  updated_at DateTime  @updatedAt
+  user       User      @relation(fields: [user_id], references: [id], onDelete: Cascade)
+  chat       PrivateChat @relation(fields: [chat_id], references: [chat_id], onDelete: Cascade)
+
+  @@index([user_id])
+  @@index([chat_id])
+}
+
+model PrivateMessage {
+  msg_id        BigInt    @id @default(autoincrement())
+  msg_reply_id  BigInt?
+  user_id       BigInt
+  chat_id       BigInt
+  encrypted_body String
+  is_pinned     Boolean   @default(false)
+  created_at    DateTime  @default(now())
+  updated_at    DateTime  @updatedAt
+  reply         PrivateMessage? @relation("ReplyTo", fields: [msg_reply_id], references: [msg_id])
+  replies       PrivateMessage[] @relation("ReplyTo")
+  user          User      @relation(fields: [user_id], references: [id], onDelete: Cascade)
+  chat          PrivateChat @relation(fields: [chat_id], references: [chat_id], onDelete: Cascade)
+  reactions     PrivateMessageReaction[]
+  attachments   PrivateMessageAttachment[]
+
+  @@index([user_id])
+  @@index([chat_id])
+  @@index([msg_reply_id])
+  @@index([is_pinned, chat_id])
+  @@index([chat_id, created_at])
+}
+
+model PrivateMessageReaction {
+  reaction_id BigInt    @id @default(autoincrement())
+  msg_id      BigInt
+  user_id     BigInt
+  emoji_id    BigInt
+  created_at  DateTime  @default(now())
+  updated_at  DateTime  @updatedAt
+  message     PrivateMessage @relation(fields: [msg_id], references: [msg_id], onDelete: Cascade)
+  user        User      @relation(fields: [user_id], references: [id], onDelete: Cascade)
+  emoji       CustomEmoji @relation(fields: [emoji_id], references: [emoji_id], onDelete: Cascade)
+
+  @@index([msg_id])
+  @@index([user_id])
+  @@index([emoji_id])
+}
+
+model PrivateMessageAttachment {
+  attach_id   BigInt        @id @default(autoincrement())
+  msg_id      BigInt
+  user_id     BigInt
+  chat_id     BigInt
+  sticker_id  BigInt?
+  gif_id      BigInt?
+  attach_type AttachmentType
+  attach_path String
+  created_at  DateTime      @default(now())
+  updated_at  DateTime      @updatedAt
+  message     PrivateMessage @relation(fields: [msg_id], references: [msg_id], onDelete: Cascade)
+  user        User          @relation(fields: [user_id], references: [id], onDelete: Cascade)
+  chat        PrivateChat   @relation(fields: [chat_id], references: [chat_id], onDelete: Cascade)
+  sticker     Sticker?      @relation(fields: [sticker_id], references: [sticker_id])
+  gif         Gif?          @relation(fields: [gif_id], references: [gif_id])
+
+  @@index([msg_id])
+  @@index([user_id])
+  @@index([chat_id])
+  @@index([sticker_id])
+  @@index([gif_id])
+}

@@ -1,0 +1,76 @@
+model RoleGlobally {
+  role_id            BigInt       @id @default(autoincrement())
+  role_name          String       @unique @db.VarChar(255)
+  role_description   String?
+  created_at         DateTime     @default(now())
+  updated_at         DateTime     @updatedAt
+  is_active          Boolean      @default(true)
+  access_level       AccessLevel  @default(USER)
+  users              User[]
+
+  @@index([role_name])
+  @@index([access_level])
+}
+
+model User {
+  id                      BigInt            @id @default(autoincrement())
+  bio                     String?
+  color                   String?
+  created_at              DateTime          @default(now())
+  email                   String            @unique
+  email_verification_expires DateTime?
+  email_verification_token String?
+  first_name              String?
+  is_verified             Boolean           @default(false)
+  last_name               String?
+  last_seen               DateTime?
+  muted_until             DateTime?
+  oauth_id                String?
+  oauth_provider          String?
+  password_hash           String?
+  password_reset_expires  DateTime?
+  password_reset_token    String?
+  phone_number            String?
+  profile_picture_url     String?
+  role_id                 BigInt
+  role                    RoleGlobally      @relation(fields: [role_id], references: [role_id])
+  status                  UserStatus        @default(ACTIVE)
+  two_factor_enabled      Boolean           @default(false)
+  two_factor_secret       String?
+  identity_key_public     String            // Signal: Public identity key
+  signed_prekey_id        BigInt?           // Signal: Reference to active signed prekey
+  signed_prekey_public    String?
+  signed_prekey_signature String?
+
+  updated_at              DateTime          @updatedAt
+  username                String            @unique
+  auth_logs               AuthLog[]
+  devices                 Device[]
+  chat_folders            ChatFolder[]
+  private_members         PrivateMember[]
+  group_members           GroupMember[]
+  channel_members         ChannelMember[]
+  private_messages        PrivateMessage[]
+  group_messages          GroupMessage[]
+  channel_messages        ChannelMessage[]
+  private_message_reactions PrivateMessageReaction[]
+  group_message_reactions GroupMessageReaction[]
+  channel_message_reactions ChannelMessageReaction[]
+  private_message_attachments PrivateMessageAttachment[]
+  group_message_attachments GroupMessageAttachment[]
+  channel_message_attachments ChannelMessageAttachment[]
+  one_time_prekeys        OneTimePrekey[]
+  banned_globally         BannedGlobally[] @relation("UserBanned")
+  banned_globally_by      BannedGlobally[] @relation("UserBannedBy")
+  payments                Payment[]
+  saved_sticker_packs     SavedStickerPack[]
+  saved_emoji_packs       SavedEmojiPack[]
+  saved_gifs              SavedGif[]
+  signed_prekey           SignedPrekey[] @relation("SignedPrekey")
+  prekey_bundle           PrekeyBundle[] @relation("PrekeyBundle")
+
+  @@index([email])
+  @@index([username])
+  @@index([role_id])
+  @@index([created_at])
+}

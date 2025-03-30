@@ -1,0 +1,6 @@
+enum AttachmentType {
+  IMAGE
+  FILE
+  STICKER
+  GIF
+}
