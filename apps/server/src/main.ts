@@ -3,30 +3,49 @@ import { AppModule } from './app.module';
 import { Logger, ValidationPipe } from '@nestjs/common';
 import helmet from 'helmet';
 
-async function bootstrap(): Promise<void> {
-  const app = await NestFactory.create(AppModule, {
-    logger: ['error', 'warn', 'log'],
-  });
+void (async function (): Promise<void> {
+  const logger = new Logger('Bootstrap');
 
-  app.setGlobalPrefix('api/v1');
-  app.enableCors();
-  app.use(helmet({ hsts: { maxAge: 31536000 } }));
-  app.set('trust proxy', true);
+  try {
+    const app = await NestFactory.create(AppModule, {
+      logger: ['error', 'warn', 'log'],
+      bufferLogs: true,
+    });
 
-  app.useGlobalPipes(
-    new ValidationPipe({
-      whitelist: true,
-      forbidNonWhitelisted: true,
-      transform: true,
-    }),
-  );
+    const API_PREFIX = 'api/v1';
+    const DEFAULT_PORT = 3000;
+    const HSTS_MAX_AGE = 31536000; // 1 year in seconds
 
-  const port = process.env.PORT || 3000;
-  await app.listen(port);
-  Logger.log(`Server is running on http://localhost:${port}`, 'Bootstrap');
-}
+    app.setGlobalPrefix(API_PREFIX);
+    app.enableCors({
+      origin: process.env.CORS_ORIGIN || true,
+      credentials: true,
+    });
 
-bootstrap().catch((error: unknown) => {
-  // Cast error to any for Logger.error; you can also enhance error typing here.
-  Logger.error('Error during bootstrap', error as any);
-});
+    app.use(
+      helmet({
+        hsts: { maxAge: HSTS_MAX_AGE },
+        contentSecurityPolicy: true,
+      }),
+    );
+
+    app.useGlobalPipes(
+      new ValidationPipe({
+        whitelist: true,
+        forbidNonWhitelisted: true,
+        transform: true,
+        transformOptions: {
+          enableImplicitConversion: true,
+        },
+      }),
+    );
+
+    const port = parseInt(process.env.PORT || '') || DEFAULT_PORT;
+
+    await app.listen(port);
+    logger.log(`Server running on http://localhost:${port}`);
+  } catch (error) {
+    logger.error('Bootstrap failed', error);
+    process.exit(1);
+  }
+})();

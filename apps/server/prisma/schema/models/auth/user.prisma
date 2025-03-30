@@ -27,7 +27,7 @@ model User {
   muted_until             DateTime?
   oauth_id                String?
   oauth_provider          String?
-  password_hash           String?
+  password_hash           String
   password_reset_expires  DateTime?
   password_reset_token    String?
   phone_number            String?
