@@ -3,4 +3,9 @@ enum AttachmentType {
   FILE
   STICKER
   GIF
+  VIDEO
+  POST
+  THREAD
+  PROFILE
+  FORUM
 }

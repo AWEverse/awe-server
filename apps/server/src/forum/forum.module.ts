@@ -4,6 +4,6 @@ import { ForumService } from './forum.service';
 
 @Module({
   controllers: [ForumController],
-  providers: [ForumService]
+  providers: [ForumService],
 })
 export class ForumModule {}
