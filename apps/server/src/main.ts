@@ -10,8 +10,8 @@ async function bootstrap(): Promise<void> {
 
   app.setGlobalPrefix('api/v1');
   app.enableCors();
-  // eslint-disable-next-line @typescript-eslint/no-unsafe-call
   app.use(helmet({ hsts: { maxAge: 31536000 } }));
+  app.set('trust proxy', true);
 
   app.useGlobalPipes(
     new ValidationPipe({
