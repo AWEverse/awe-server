@@ -1,11 +1,10 @@
+
 enum AttachmentType {
-  IMAGE
-  FILE
+  PHOTO
+  VIDEO
+  DOCUMENT
+  AUDIO
+  VOICE
   STICKER
   GIF
-  VIDEO
-  POST
-  THREAD
-  PROFILE
-  FORUM
 }

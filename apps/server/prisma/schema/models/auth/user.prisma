@@ -68,9 +68,11 @@ model User {
   saved_gifs              SavedGif[]
   signed_prekey           SignedPrekey[] @relation("SignedPrekey")
   prekey_bundle           PrekeyBundle[] @relation("PrekeyBundle")
+  user_channels           ChannelChat[] @relation("ChannelCreator")
 
   @@index([email])
   @@index([username])
   @@index([role_id])
   @@index([created_at])
+  ChannelActivityLog ChannelActivityLog[]
 }
