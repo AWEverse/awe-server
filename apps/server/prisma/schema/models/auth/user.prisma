@@ -75,4 +75,5 @@ model User {
   @@index([role_id])
   @@index([created_at])
   ChannelActivityLog ChannelActivityLog[]
+  PrivateMessage PrivateMessage[] @relation("ForwardedFrom")
 }
