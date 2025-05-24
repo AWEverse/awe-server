@@ -1,0 +1,5 @@
+enum AccessLevel {
+  USER
+  MODERATOR
+  ADMIN
+}

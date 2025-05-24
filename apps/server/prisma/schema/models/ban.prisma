@@ -1,0 +1,33 @@
+
+model BannedGlobally {
+  id            BigInt    @id @default(autoincrement())
+  user_id       BigInt
+  banned_by     BigInt
+  ban_reason_id BigInt?   // Added to reference BanReason
+  ban_reason    String    @db.VarChar(255)
+  ban_start     DateTime  @default(now())
+  ban_end       DateTime?
+  is_permanent  Boolean   @default(false)
+  source        String    @db.VarChar(255)
+  last_known_ip String?
+  created_at    DateTime  @default(now())
+  user          User      @relation("UserBanned", fields: [user_id], references: [id], onDelete: Cascade)
+  banned_by_user User     @relation("UserBannedBy", fields: [banned_by], references: [id])
+  ban_reason_ref BanReason? @relation(fields: [ban_reason_id], references: [id])
+
+  @@index([user_id])
+  @@index([banned_by])
+  @@index([ban_start])
+  @@index([ban_end])
+  @@index([ban_reason_id])
+}
+
+model BanReason {
+  id         BigInt    @id @default(autoincrement())
+  name       String    @unique @db.VarChar(255)
+  created_at DateTime  @default(now())
+  updated_at DateTime  @updatedAt
+  bans       BannedGlobally[] // Updated relation
+
+  @@index([name])
+}

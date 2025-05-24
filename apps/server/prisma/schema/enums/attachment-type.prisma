@@ -1,0 +1,12 @@
+enum AttachmentType {
+  PHOTO
+  VIDEO
+  AUDIO
+  DOCUMENT
+  STICKER
+  GIF
+  VOICE
+  VIDEO_NOTE
+  CONTACT
+  LOCATION
+}
