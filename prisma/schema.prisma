@@ -1,0 +1,1078 @@
+// Высокопроизводительная схема для мультимедийной платформы
+// Объединяет мессенджер, видеохостинг, социальную сеть и форум
+// Основные оптимизации:
+// 1. BigInt ID вместо UUID (экономия 75% места в индексах и FK)
+// 2. Битовые флаги вместо множества Boolean полей
+// 3. Компактные VARCHAR с точными ограничениями
+// 4. Оптимизированные составные индексы для частых запросов
+// 5. Timestamptz(3) вместо полной точности (экономия места)
+// 6. Денормализация для критически важных запросов
+// 7. JSON для гибких настроек вместо множества колонок
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider  = "postgresql"
+  url       = env("DATABASE_URL")
+  directUrl = env("DIRECT_URL")
+}
+
+// ===== ENUMS =====
+
+enum UserStatus {
+  ACTIVE
+  INACTIVE
+  BANNED
+  DELETED
+  RESTRICTED
+}
+
+enum ChatType {
+  PRIVATE
+  GROUP
+  CHANNEL
+  COMMUNITY
+}
+
+enum ChatRole {
+  OWNER
+  ADMIN
+  MODERATOR
+  MEMBER
+  SUBSCRIBER
+}
+
+enum MessageType {
+  SYSTEM
+  TEXT
+  IMAGE
+  VIDEO
+  AUDIO
+  FILE
+  DOCUMENT
+  STICKER
+  VOICE
+  VIDEO_NOTE
+  LOCATION
+  CONTACT
+  POLL
+  DICE
+  GAME
+  EMOJI
+  GIF
+  MARKDOWN
+}
+
+enum ContentType {
+  VIDEO
+  SHORT_VIDEO
+  LIVE_STREAM
+  PODCAST
+  IMAGE_POST
+  TEXT_POST
+  STORY
+  THREAD
+  FORUM_POST
+  FORUM_REPLY
+}
+
+enum ContentStatus {
+  DRAFT
+  PUBLISHED
+  UNLISTED
+  PRIVATE
+  SCHEDULED
+  ARCHIVED
+  DELETED
+  UNDER_REVIEW
+}
+
+enum SubscriptionType {
+  FREE
+  PREMIUM
+  CREATOR
+  BUSINESS
+}
+
+enum NotificationType {
+  MESSAGE
+  REACTION
+  COMMENT
+  LIKE
+  FOLLOW
+  MENTION
+  VIDEO_UPLOAD
+  LIVE_START
+  COMMUNITY_POST
+}
+
+enum ReportReason {
+  SPAM
+  HARASSMENT
+  HATE_SPEECH
+  VIOLENCE
+  COPYRIGHT
+  ADULT_CONTENT
+  MISINFORMATION
+  OTHER
+}
+
+// ===== ОСНОВНЫЕ МОДЕЛИ =====
+
+model RoleGlobally {
+  id          Int      @id @default(autoincrement())
+  name        String   @unique @db.VarChar(32)
+  flags       Int      @default(0) // founder(1), admin(2), moderator(4), verified(8)
+  permissions Json?
+  createdAt   DateTime @default(now()) @db.Timestamptz(3)
+  updatedAt   DateTime @updatedAt @db.Timestamptz(3)
+
+  users User[]
+
+  @@index([name])
+  @@index([flags])
+}
+
+model User {
+  id           BigInt  @id @default(autoincrement())
+  email        String  @unique @db.VarChar(254)
+  username     String  @unique @db.VarChar(32)
+  passwordHash String? @db.VarChar(128)
+  fullName     String? @db.VarChar(128) // Увеличили для полного имени
+  bio          String? @db.VarChar(500) // Увеличили для подробного описания
+  avatarUrl    String? @db.VarChar(512)
+  bannerUrl    String? @db.VarChar(512) // Для обложки канала
+  color        String? @db.Char(7) // HEX цвет для оформления
+  phoneNumber  String? @unique @db.VarChar(15) // Формат +1234567890
+
+  // Битовые флаги: verified(1), bot(2), online(4), creator(8), live(16)
+  flags  Int        @default(0)
+  status UserStatus @default(ACTIVE)
+
+  lastSeen  DateTime? @db.Timestamptz(3)
+  createdAt DateTime  @default(now()) @db.Timestamptz(3)
+  updatedAt DateTime  @updatedAt @db.Timestamptz(3)
+  deletedAt DateTime? @db.Timestamptz(3)
+  roleId    Int       @default(1)
+
+  searchVector String? @db.Text
+  timezone     String? @db.VarChar(32)
+  locale       String? @db.VarChar(5)
+
+  // Статистика для денормализации
+  subscribersCount   Int    @default(0)
+  subscriptionsCount Int    @default(0)
+  videosCount        Int    @default(0)
+  postsCount         Int    @default(0)
+  totalViews         BigInt @default(0)
+  totalLikes         BigInt @default(0)
+
+  role                 RoleGlobally            @relation(fields: [roleId], references: [id])
+  devices              Device[]
+  sessions             Session[]
+  chatsCreated         Chat[]                  @relation("chatsCreated")
+  chatParticipants     ChatParticipant[]
+  messages             Message[]               @relation("messagesSent")
+  refreshTokens        RefreshTokenBlacklist[]
+  userCrypto           UserCrypto?
+  messageReactions     MessageReaction[]
+  messageReads         MessageRead[]
+  contactsAdded        ContactList[]           @relation("UserContacts")
+  contactOf            ContactList[]           @relation("ContactOf")
+  userSettings         UserSettings?
+  notificationSettings NotificationSettings[]
+
+  // Контент и социальные функции
+  contents        Content[]
+  comments        Comment[]
+  likes           Like[]
+  subscriptions   Subscription[] @relation("UserSubscriptions")
+  subscribers     Subscription[] @relation("SubscribedTo")
+  playlists       Playlist[]
+  watchHistory    WatchHistory[]
+  notifications   Notification[]
+  reports         Report[]       @relation("ReportedBy")
+  reportedContent Report[]       @relation("ReportedUser")
+
+  // Форум
+  forumPosts         ForumPost[]
+  forumSubscriptions ForumSubscription[]
+
+  // Security
+  securityAudits      SecurityAuditLog[] @relation("SecurityAudits")
+  securityResolutions SecurityAuditLog[] @relation("SecurityResolver")
+  ForumReply          ForumReply[]
+
+  @@index([email])
+  @@index([username])
+  @@index([phoneNumber])
+  @@index([roleId])
+  @@index([status, flags])
+  @@index([lastSeen])
+  @@index([createdAt])
+  @@index([status, deletedAt])
+  @@index([subscribersCount])
+  @@index([totalViews])
+}
+
+model Device {
+  id            BigInt    @id @default(autoincrement())
+  userId        BigInt
+  deviceId      String    @unique @db.VarChar(64)
+  deviceName    String?   @db.VarChar(64)
+  deviceType    String?   @db.VarChar(32)
+  deviceVersion String?   @db.VarChar(32)
+  ipAddress     String?   @db.Inet
+  userAgent     String?   @db.VarChar(255)
+  flags         Int       @default(1) // isActive(1), trusted(2)
+  lastUsed      DateTime? @db.Timestamptz(3)
+  createdAt     DateTime  @default(now()) @db.Timestamptz(3)
+  updatedAt     DateTime  @updatedAt @db.Timestamptz(3)
+
+  user     User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  sessions Session[]
+
+  @@index([userId])
+  @@index([deviceId])
+  @@index([userId, flags])
+  @@index([lastUsed])
+}
+
+model Session {
+  id           BigInt    @id @default(autoincrement())
+  userId       BigInt
+  deviceId     BigInt
+  ratchetState Bytes
+  sessionKey   String?   @db.VarChar(256)
+  expiresAt    DateTime? @db.Timestamptz(3)
+  createdAt    DateTime  @default(now()) @db.Timestamptz(3)
+  updatedAt    DateTime  @updatedAt @db.Timestamptz(3)
+  flags        Int       @default(1) // isActive(1)
+
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+  device Device @relation(fields: [deviceId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([deviceId])
+  @@index([userId, flags])
+  @@index([expiresAt])
+  @@index([sessionKey])
+}
+
+model UserCrypto {
+  id                String   @id @default(uuid())
+  userId            BigInt   @unique
+  identityKeyPublic String   @db.VarChar(128)
+  createdAt         DateTime @default(now()) @db.Timestamptz(3)
+  updatedAt         DateTime @updatedAt @db.Timestamptz(3)
+
+  user               User                @relation(fields: [userId], references: [id], onDelete: Cascade)
+  signedPreKeys      SignedPreKey[]
+  oneTimePreKeys     OneTimePreKey[]
+  usedOneTimePreKeys UsedOneTimePreKey[]
+
+  @@index([userId])
+}
+
+model SignedPreKey {
+  id           BigInt    @id @default(autoincrement())
+  userCryptoId String
+  keyId        Int
+  publicKey    String    @db.VarChar(128)
+  signature    String    @db.VarChar(128)
+  createdAt    DateTime  @default(now()) @db.Timestamptz(3)
+  flags        Int       @default(0) // isUsed(1)
+  expiresAt    DateTime? @db.Timestamptz(3)
+
+  userCrypto UserCrypto @relation(fields: [userCryptoId], references: [id], onDelete: Cascade)
+
+  @@unique([userCryptoId, keyId])
+  @@index([userCryptoId])
+  @@index([flags])
+  @@index([expiresAt])
+}
+
+model OneTimePreKey {
+  id           BigInt   @id @default(autoincrement())
+  userCryptoId String
+  keyId        Int
+  publicKey    String   @db.VarChar(128)
+  createdAt    DateTime @default(now()) @db.Timestamptz(3)
+  flags        Int      @default(0) // isUsed(1)
+
+  userCrypto UserCrypto @relation(fields: [userCryptoId], references: [id], onDelete: Cascade)
+
+  @@unique([userCryptoId, keyId])
+  @@index([userCryptoId])
+  @@index([flags])
+  @@index([createdAt])
+}
+
+model UsedOneTimePreKey {
+  id           BigInt   @id @default(autoincrement())
+  userCryptoId String
+  keyId        Int
+  usedAt       DateTime @default(now()) @db.Timestamptz(3)
+
+  userCrypto UserCrypto @relation(fields: [userCryptoId], references: [id], onDelete: Cascade)
+
+  @@unique([userCryptoId, keyId])
+  @@index([userCryptoId])
+  @@index([usedAt])
+}
+
+// ===== МЕССЕНДЖЕР =====
+
+model Chat {
+  id          BigInt   @id @default(autoincrement())
+  type        ChatType
+  createdById BigInt
+  title       String?  @db.VarChar(128)
+  description String?  @db.VarChar(500)
+  avatarUrl   String?  @db.VarChar(200)
+
+  // Битовые флаги: archived(1), public(2), verified(4), premium(8)
+  flags Int @default(0)
+
+  inviteLink      String?   @unique @db.VarChar(64)
+  memberCount     Int       @default(0)
+  lastMessageAt   DateTime? @db.Timestamptz(3)
+  lastMessageText String?   @db.VarChar(100) // Денормализация для превью
+  createdAt       DateTime  @default(now()) @db.Timestamptz(3)
+  updatedAt       DateTime  @updatedAt @db.Timestamptz(3)
+  deletedAt       DateTime? @db.Timestamptz(3)
+
+  createdBy            User                   @relation("chatsCreated", fields: [createdById], references: [id])
+  participants         ChatParticipant[]
+  messages             Message[]
+  pinnedMessageId      BigInt?
+  pinnedMessage        Message?               @relation("PinnedMessage", fields: [pinnedMessageId], references: [id])
+  chatSettings         ChatSettings?
+  notificationSettings NotificationSettings[]
+
+  @@index([type])
+  @@index([createdById])
+  @@index([flags])
+  @@index([lastMessageAt])
+  @@index([memberCount])
+  @@index([type, flags])
+  @@index([createdAt])
+  @@index([deletedAt])
+}
+
+model ChatParticipant {
+  id       BigInt    @id @default(autoincrement())
+  chatId   BigInt
+  userId   BigInt
+  role     ChatRole  @default(MEMBER)
+  joinedAt DateTime  @default(now()) @db.Timestamptz(3)
+  leftAt   DateTime? @db.Timestamptz(3)
+
+  // Битовые флаги: admin(1), owner(2), muted(4), banned(8)
+  flags      Int       @default(0)
+  mutedUntil DateTime? @db.Timestamptz(3)
+
+  chat Chat @relation(fields: [chatId], references: [id], onDelete: Cascade)
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([chatId, userId])
+  @@index([chatId])
+  @@index([userId])
+  @@index([role])
+  @@index([joinedAt])
+  @@index([leftAt])
+  @@index([chatId, role])
+  @@index([userId, leftAt])
+}
+
+model Message {
+  id          BigInt      @id @default(autoincrement())
+  chatId      BigInt
+  senderId    BigInt
+  content     Bytes // Зашифрованный контент
+  header      Bytes // Метаданные сообщения
+  messageType MessageType @default(TEXT)
+  createdAt   DateTime    @default(now()) @db.Timestamptz(3)
+  updatedAt   DateTime    @updatedAt @db.Timestamptz(3)
+  editedAt    DateTime?   @db.Timestamptz(3)
+
+  // Битовые флаги: deleted(1), edited(2), forwarded(4), pinned(8)
+  flags     Int       @default(0)
+  deletedAt DateTime? @db.Timestamptz(3)
+
+  replyToId       BigInt?
+  forwardedFromId BigInt?
+  threadId        BigInt? // Для тредов в чатах
+
+  chat          Chat                @relation(fields: [chatId], references: [id], onDelete: Cascade)
+  sender        User                @relation("messagesSent", fields: [senderId], references: [id])
+  replyTo       Message?            @relation("ReplyTo", fields: [replyToId], references: [id])
+  replies       Message[]           @relation("ReplyTo")
+  forwardedFrom Message?            @relation("ForwardedFrom", fields: [forwardedFromId], references: [id])
+  forwards      Message[]           @relation("ForwardedFrom")
+  thread        MessageThread?      @relation("ThreadMessage", fields: [threadId], references: [id])
+  attachments   MessageAttachment[]
+  reactions     MessageReaction[]
+  edits         MessageEdit[]
+  pinnedIn      Chat[]              @relation("PinnedMessage")
+  messageReads  MessageRead[]
+
+  @@index([chatId, createdAt])
+  @@index([senderId])
+  @@index([messageType])
+  @@index([flags])
+  @@index([replyToId])
+  @@index([forwardedFromId])
+  @@index([threadId])
+  @@index([chatId, flags, createdAt])
+  @@index([deletedAt])
+}
+
+model MessageThread {
+  id        BigInt   @id @default(autoincrement())
+  chatId    BigInt
+  creatorId BigInt
+  title     String?  @db.VarChar(128)
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @db.Timestamptz(3)
+  flags     Int      @default(0) // active(1), locked(2)
+
+  messages Message[] @relation("ThreadMessage")
+
+  @@index([chatId])
+  @@index([creatorId])
+  @@index([createdAt])
+}
+
+model MessageEdit {
+  id        BigInt   @id @default(autoincrement())
+  messageId BigInt
+  content   Bytes
+  editedAt  DateTime @default(now()) @db.Timestamptz(3)
+
+  message Message @relation(fields: [messageId], references: [id], onDelete: Cascade)
+
+  @@index([messageId])
+  @@index([editedAt])
+}
+
+model MessageAttachment {
+  id          BigInt   @id @default(autoincrement())
+  messageId   BigInt
+  fileName    String   @db.VarChar(128)
+  mimeType    String   @db.VarChar(64)
+  fileHash    String   @db.VarChar(64)
+  fileKey     String   @db.VarChar(64)
+  fileIV      String   @db.VarChar(32)
+  fileSize    Int
+  fileType    String   @db.VarChar(16)
+  thumbnail   String?  @db.VarChar(200)
+  description String?  @db.VarChar(255)
+  url         String   @db.VarChar(512)
+  createdAt   DateTime @default(now()) @db.Timestamptz(3)
+
+  message Message @relation(fields: [messageId], references: [id], onDelete: Cascade)
+
+  @@index([messageId])
+  @@index([mimeType])
+  @@index([fileType])
+  @@index([fileHash])
+}
+
+model MessageReaction {
+  id        BigInt   @id @default(autoincrement())
+  messageId BigInt
+  userId    BigInt
+  reaction  String   @db.VarChar(8)
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+
+  message Message @relation(fields: [messageId], references: [id], onDelete: Cascade)
+  user    User    @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([messageId, userId, reaction])
+  @@index([messageId])
+  @@index([userId])
+  @@index([reaction])
+}
+
+model MessageRead {
+  id        BigInt   @id @default(autoincrement())
+  messageId BigInt
+  userId    BigInt
+  readAt    DateTime @default(now()) @db.Timestamptz(3)
+
+  message Message @relation(fields: [messageId], references: [id], onDelete: Cascade)
+  user    User    @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([messageId, userId])
+  @@index([messageId])
+  @@index([userId])
+  @@index([readAt])
+  @@index([userId, readAt])
+}
+
+// ===== КОНТЕНТ (YOUTUBE + INSTAGRAM) =====
+
+model Content {
+  id           BigInt        @id @default(autoincrement())
+  authorId     BigInt
+  type         ContentType
+  status       ContentStatus @default(DRAFT)
+  title        String        @db.VarChar(200)
+  description  String?       @db.Text
+  thumbnailUrl String?       @db.VarChar(300)
+
+  // Битовые флаги: featured(1), monetized(2), ageRestricted(4), commentsDisabled(8)
+  flags Int @default(0)
+
+  // Метаданные для различных типов контента
+  metadata Json? // duration, resolution, codec для видео; dimensions для изображений
+
+  // Денормализованная статистика
+  viewsCount    BigInt @default(0)
+  likesCount    BigInt @default(0)
+  dislikesCount BigInt @default(0)
+  sharesCount   BigInt @default(0)
+  commentsCount Int    @default(0)
+
+  // Планирование публикации
+  publishedAt DateTime? @db.Timestamptz(3)
+  scheduledAt DateTime? @db.Timestamptz(3)
+
+  createdAt DateTime  @default(now()) @db.Timestamptz(3)
+  updatedAt DateTime  @updatedAt @db.Timestamptz(3)
+  deletedAt DateTime? @db.Timestamptz(3)
+
+  author      User                @relation(fields: [authorId], references: [id])
+  attachments ContentAttachment[]
+  comments    Comment[]
+  likes       Like[]
+  tags        ContentTag[]
+  playlists   PlaylistItem[]
+  history     WatchHistory[]
+  reports     Report[]
+
+  @@index([authorId])
+  @@index([type])
+  @@index([status])
+  @@index([publishedAt])
+  @@index([viewsCount])
+  @@index([likesCount])
+  @@index([createdAt])
+  @@index([flags])
+  @@index([type, status, publishedAt])
+  @@index([authorId, type, status])
+}
+
+model ContentAttachment {
+  id        BigInt   @id @default(autoincrement())
+  contentId BigInt
+  url       String   @db.VarChar(500)
+  mimeType  String   @db.VarChar(64)
+  fileSize  BigInt
+  metadata  Json? // width, height, duration, bitrate, etc.
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+
+  content Content @relation(fields: [contentId], references: [id], onDelete: Cascade)
+
+  @@index([contentId])
+  @@index([mimeType])
+}
+
+model Comment {
+  id        BigInt  @id @default(autoincrement())
+  contentId BigInt
+  authorId  BigInt
+  parentId  BigInt? // Для вложенных комментариев
+  text      String  @db.VarChar(1000)
+
+  // Битовые флаги: deleted(1), edited(2), pinned(4), hearted(8)
+  flags Int @default(0)
+
+  likesCount BigInt    @default(0)
+  createdAt  DateTime  @default(now()) @db.Timestamptz(3)
+  updatedAt  DateTime  @updatedAt @db.Timestamptz(3)
+  deletedAt  DateTime? @db.Timestamptz(3)
+
+  content Content   @relation(fields: [contentId], references: [id], onDelete: Cascade)
+  author  User      @relation(fields: [authorId], references: [id])
+  parent  Comment?  @relation("CommentReplies", fields: [parentId], references: [id])
+  replies Comment[] @relation("CommentReplies")
+  likes   Like[]
+
+  @@index([contentId])
+  @@index([authorId])
+  @@index([parentId])
+  @@index([createdAt])
+  @@index([likesCount])
+  @@index([contentId, parentId, createdAt])
+}
+
+model Like {
+  id        BigInt   @id @default(autoincrement())
+  userId    BigInt
+  contentId BigInt?
+  commentId BigInt?
+  value     Int      @default(1) // 1 для лайка, -1 для дизлайка
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+
+  user    User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  content Content? @relation(fields: [contentId], references: [id], onDelete: Cascade)
+  comment Comment? @relation(fields: [commentId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, contentId])
+  @@unique([userId, commentId])
+  @@index([userId])
+  @@index([contentId])
+  @@index([commentId])
+  @@index([createdAt])
+}
+
+model Tag {
+  id          BigInt   @id @default(autoincrement())
+  name        String   @unique @db.VarChar(64)
+  description String?  @db.VarChar(255)
+  flags       Int      @default(0) // trending(1), official(2)
+  usageCount  BigInt   @default(0)
+  createdAt   DateTime @default(now()) @db.Timestamptz(3)
+
+  contentTags ContentTag[]
+
+  @@index([name])
+  @@index([usageCount])
+  @@index([flags])
+}
+
+model ContentTag {
+  id        BigInt @id @default(autoincrement())
+  contentId BigInt
+  tagId     BigInt
+
+  content Content @relation(fields: [contentId], references: [id], onDelete: Cascade)
+  tag     Tag     @relation(fields: [tagId], references: [id], onDelete: Cascade)
+
+  @@unique([contentId, tagId])
+  @@index([contentId])
+  @@index([tagId])
+}
+
+// ===== СОЦИАЛЬНАЯ СЕТЬ =====
+
+model Subscription {
+  id             BigInt @id @default(autoincrement())
+  subscriberId   BigInt
+  subscribedToId BigInt
+
+  // Битовые флаги: notificationsEnabled(1), premium(2)
+  flags     Int      @default(1)
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+
+  subscriber   User @relation("UserSubscriptions", fields: [subscriberId], references: [id], onDelete: Cascade)
+  subscribedTo User @relation("SubscribedTo", fields: [subscribedToId], references: [id], onDelete: Cascade)
+
+  @@unique([subscriberId, subscribedToId])
+  @@index([subscriberId])
+  @@index([subscribedToId])
+  @@index([createdAt])
+}
+
+model Playlist {
+  id           BigInt  @id @default(autoincrement())
+  authorId     BigInt
+  title        String  @db.VarChar(128)
+  description  String? @db.VarChar(500)
+  thumbnailUrl String? @db.VarChar(300)
+
+  // Битовые флаги: public(1), collaborative(2), featured(4)
+  flags Int @default(1)
+
+  itemsCount Int      @default(0)
+  createdAt  DateTime @default(now()) @db.Timestamptz(3)
+  updatedAt  DateTime @updatedAt @db.Timestamptz(3)
+
+  author User           @relation(fields: [authorId], references: [id])
+  items  PlaylistItem[]
+
+  @@index([authorId])
+  @@index([flags])
+  @@index([createdAt])
+}
+
+model PlaylistItem {
+  id         BigInt   @id @default(autoincrement())
+  playlistId BigInt
+  contentId  BigInt
+  position   Int
+  addedAt    DateTime @default(now()) @db.Timestamptz(3)
+
+  playlist Playlist @relation(fields: [playlistId], references: [id], onDelete: Cascade)
+  content  Content  @relation(fields: [contentId], references: [id], onDelete: Cascade)
+
+  @@unique([playlistId, contentId])
+  @@index([playlistId, position])
+  @@index([contentId])
+}
+
+model WatchHistory {
+  id        BigInt   @id @default(autoincrement())
+  userId    BigInt
+  contentId BigInt
+  watchedAt DateTime @default(now()) @db.Timestamptz(3)
+  watchTime Int      @default(0) // Секунды просмотра
+  completed Boolean  @default(false)
+  progress  Float    @default(0) // Процент просмотра (0-1)
+
+  user    User    @relation(fields: [userId], references: [id], onDelete: Cascade)
+  content Content @relation(fields: [contentId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, contentId])
+  @@index([userId])
+  @@index([contentId])
+  @@index([watchedAt])
+  @@index([userId, watchedAt])
+}
+
+model Notification {
+  id      BigInt           @id @default(autoincrement())
+  userId  BigInt
+  type    NotificationType
+  title   String           @db.VarChar(128)
+  message String           @db.VarChar(255)
+  data    Json? // Дополнительные данные (ID контента, пользователя и т.д.)
+
+  // Битовые флаги: read(1), important(2)
+  flags Int @default(0)
+
+  createdAt DateTime  @default(now()) @db.Timestamptz(3)
+  readAt    DateTime? @db.Timestamptz(3)
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([type])
+  @@index([flags])
+  @@index([createdAt])
+  @@index([userId, flags, createdAt])
+}
+
+// ===== ФОРУМ =====
+
+model ForumCategory {
+  id          BigInt   @id @default(autoincrement())
+  name        String   @db.VarChar(64)
+  description String?  @db.VarChar(255)
+  color       String?  @db.Char(7)
+  position    Int      @default(0)
+  flags       Int      @default(1) // active(1), moderated(2)
+  postsCount  Int      @default(0)
+  createdAt   DateTime @default(now()) @db.Timestamptz(3)
+
+  posts ForumPost[]
+
+  @@index([position])
+  @@index([flags])
+  @@index([postsCount])
+}
+
+model ForumPost {
+  id         BigInt @id @default(autoincrement())
+  categoryId BigInt
+  authorId   BigInt
+  title      String @db.VarChar(200)
+  content    String @db.Text
+
+  // Битовые флаги: pinned(1), locked(2), featured(4), solved(8)
+  flags Int @default(0)
+
+  viewsCount   Int @default(0)
+  repliesCount Int @default(0)
+  likesCount   Int @default(0)
+
+  createdAt   DateTime  @default(now()) @db.Timestamptz(3)
+  updatedAt   DateTime  @updatedAt @db.Timestamptz(3)
+  lastReplyAt DateTime? @db.Timestamptz(3)
+
+  category      ForumCategory       @relation(fields: [categoryId], references: [id])
+  author        User                @relation(fields: [authorId], references: [id])
+  replies       ForumReply[]
+  subscriptions ForumSubscription[]
+
+  @@index([categoryId])
+  @@index([authorId])
+  @@index([flags])
+  @@index([createdAt])
+  @@index([lastReplyAt])
+  @@index([viewsCount])
+  @@index([categoryId, flags, lastReplyAt])
+}
+
+model ForumReply {
+  id         BigInt   @id @default(autoincrement())
+  postId     BigInt
+  authorId   BigInt
+  content    String   @db.Text
+  flags      Int      @default(0) // deleted(1), edited(2), solution(4)
+  likesCount Int      @default(0)
+  createdAt  DateTime @default(now()) @db.Timestamptz(3)
+  updatedAt  DateTime @updatedAt @db.Timestamptz(3)
+
+  post   ForumPost @relation(fields: [postId], references: [id], onDelete: Cascade)
+  author User      @relation(fields: [authorId], references: [id])
+
+  @@index([postId])
+  @@index([authorId])
+  @@index([createdAt])
+  @@index([flags])
+}
+
+model ForumSubscription {
+  id        BigInt   @id @default(autoincrement())
+  userId    BigInt
+  postId    BigInt
+  flags     Int      @default(1) // notifications(1)
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+
+  user User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  post ForumPost @relation(fields: [postId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, postId])
+  @@index([userId])
+  @@index([postId])
+}
+
+// ===== МОДЕРАЦИЯ И БЕЗОПАСНОСТЬ =====
+
+model Report {
+  id          BigInt       @id @default(autoincrement())
+  reporterId  BigInt
+  userId      BigInt? // Если жалуемся на пользователя
+  contentId   BigInt? // Если жалуемся на контент
+  reason      ReportReason
+  description String?      @db.VarChar(500)
+  flags       Int          @default(0) // reviewed(1), resolved(2), dismissed(4)
+  createdAt   DateTime     @default(now()) @db.Timestamptz(3)
+  reviewedAt  DateTime?    @db.Timestamptz(3)
+
+  reporter User     @relation("ReportedBy", fields: [reporterId], references: [id])
+  user     User?    @relation("ReportedUser", fields: [userId], references: [id])
+  content  Content? @relation(fields: [contentId], references: [id])
+
+  @@index([reporterId])
+  @@index([userId])
+  @@index([contentId])
+  @@index([reason])
+  @@index([flags])
+  @@index([createdAt])
+}
+
+model SecurityAuditLog {
+  id          BigInt    @id @default(autoincrement())
+  userId      BigInt?
+  action      String    @db.VarChar(64)
+  severity    Int       @default(0) // 0=info, 1=warning, 2=error, 3=critical
+  description String    @db.VarChar(255)
+  ipAddress   String?   @db.Inet
+  userAgent   String?   @db.VarChar(255)
+  metadata    Json?
+  flags       Int       @default(0) // resolved(1)
+  resolvedAt  DateTime? @db.Timestamptz(3)
+  resolvedBy  BigInt?
+  createdAt   DateTime  @default(now()) @db.Timestamptz(3)
+
+  user     User? @relation("SecurityAudits", fields: [userId], references: [id], onDelete: SetNull)
+  resolver User? @relation("SecurityResolver", fields: [resolvedBy], references: [id], onDelete: SetNull)
+
+  @@index([userId, createdAt])
+  @@index([severity, flags])
+  @@index([action, createdAt])
+  @@index([ipAddress])
+}
+
+// ===== НАСТРОЙКИ И КОНФИГУРАЦИЯ =====
+
+model RefreshTokenBlacklist {
+  id        BigInt   @id @default(autoincrement())
+  tokenHash String   @unique @db.VarChar(64)
+  userId    BigInt
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+  expiresAt DateTime @db.Timestamptz(3)
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([expiresAt])
+  @@index([tokenHash])
+}
+
+model ContactList {
+  id          BigInt   @id @default(autoincrement())
+  userId      BigInt
+  contactId   BigInt
+  displayName String?  @db.VarChar(64)
+  phoneNumber String?  @db.VarChar(15)
+  addedAt     DateTime @default(now()) @db.Timestamptz(3)
+  flags       Int      @default(0) // blocked(1), favorite(2)
+
+  user    User @relation("UserContacts", fields: [userId], references: [id], onDelete: Cascade)
+  contact User @relation("ContactOf", fields: [contactId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, contactId])
+  @@index([userId])
+  @@index([contactId])
+  @@index([flags])
+}
+
+model UserSettings {
+  id     BigInt @id @default(autoincrement())
+  userId BigInt @unique
+
+  // Объединили настройки в JSON для экономии колонок
+  uiSettings    Json? // theme, language, fontSize, animations
+  notifications Json? // enabled, sound, vibration, types
+  privacy       Json? // lastSeen, profilePhoto, status, messaging
+  security      Json? // biometric, twoFactor, sessionTimeout
+  dataStorage   Json? // autoDownload, backup, quality settings
+  content       Json? // autoplay, captions, recommendations
+  experimental  Json? // beta features, labs
+  blockedUsers  BigInt[] // Массив ID заблокированных пользователей
+
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @db.Timestamptz(3)
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+}
+
+model ChatSettings {
+  id       BigInt @id @default(autoincrement())
+  chatId   BigInt @unique
+  settings Json? // slowMode, maxMembers, joinApproval, autoDelete, etc.
+
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @db.Timestamptz(3)
+
+  chat Chat @relation(fields: [chatId], references: [id], onDelete: Cascade)
+
+  @@index([chatId])
+}
+
+model NotificationSettings {
+  id               BigInt   @id @default(autoincrement())
+  userId           BigInt
+  chatId           BigInt?
+  notificationType String   @db.VarChar(32)
+  flags            Int      @default(7) // enabled(1), sound(2), vibration(4)
+  createdAt        DateTime @default(now()) @db.Timestamptz(3)
+  updatedAt        DateTime @updatedAt @db.Timestamptz(3)
+
+  user User  @relation(fields: [userId], references: [id], onDelete: Cascade)
+  chat Chat? @relation(fields: [chatId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, chatId, notificationType])
+  @@index([userId])
+  @@index([chatId])
+  @@index([notificationType])
+}
+
+// ===== КЭШИРОВАНИЕ И АНАЛИТИКА =====
+
+model ChatStatsCache {
+  chatId           BigInt    @id
+  messageCount     Int       @default(0)
+  participantCount Int       @default(0)
+  lastActivity     DateTime? @db.Timestamptz(3)
+  storageBytes     BigInt    @default(0)
+  lastUpdated      DateTime  @default(now()) @db.Timestamptz(3)
+
+  @@index([lastActivity])
+  @@index([lastUpdated])
+}
+
+model UserStatsCache {
+  userId        BigInt    @id
+  messagesSent  Int       @default(0)
+  chatsCount    Int       @default(0)
+  contactsCount Int       @default(0)
+  storageUsed   BigInt    @default(0)
+  lastActivity  DateTime? @db.Timestamptz(3)
+  lastUpdated   DateTime  @default(now()) @db.Timestamptz(3)
+
+  @@index([lastActivity])
+  @@index([lastUpdated])
+}
+
+model ContentStatsCache {
+  contentId    BigInt   @id
+  hourlyViews  Json? // Почасовая статистика просмотров
+  dailyViews   Json? // Ежедневная статистика
+  demographics Json? // Демография аудитории
+  engagement   Json? // Метрики вовлеченности
+  revenue      Json? // Данные о доходах
+  lastUpdated  DateTime @default(now()) @db.Timestamptz(3)
+
+  @@index([lastUpdated])
+}
+
+// ===== АРХИВИРОВАНИЕ =====
+
+model MessageArchive {
+  id              BigInt      @id @default(autoincrement())
+  originalId      BigInt
+  chatId          BigInt
+  senderId        BigInt
+  content         Bytes
+  messageType     MessageType
+  createdAt       DateTime    @db.Timestamptz(3)
+  archiveDate     DateTime    @default(now()) @db.Timestamptz(3)
+  compressionType String      @default("gzip") @db.VarChar(16)
+
+  @@index([chatId, createdAt])
+  @@index([originalId])
+  @@index([archiveDate])
+}
+
+model ContentArchive {
+  id              BigInt      @id @default(autoincrement())
+  originalId      BigInt
+  authorId        BigInt
+  type            ContentType
+  metadata        Json // Архивированные метаданные
+  archiveDate     DateTime    @default(now()) @db.Timestamptz(3)
+  archiveReason   String      @db.VarChar(64) // deleted, expired, compliance
+  compressionType String      @default("gzip") @db.VarChar(16)
+
+  @@index([originalId])
+  @@index([authorId])
+  @@index([type])
+  @@index([archiveDate])
+}
+
+// ===== ПОИСКОВЫЙ КЭШИ =====
+
+model SearchCache {
+  queryHash String   @id @db.VarChar(32)
+  results   Json
+  expiresAt DateTime @db.Timestamptz(3)
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+  hitCount  Int      @default(1)
+
+  @@index([expiresAt])
+  @@index([hitCount])
+  @@index([createdAt])
+}
+
+model TrendingCache {
+  id        BigInt   @id @default(autoincrement())
+  type      String   @db.VarChar(32) // tags, creators, content
+  data      Json // Трендовые данные
+  region    String?  @db.VarChar(8) // Географический регион
+  expiresAt DateTime @db.Timestamptz(3)
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+
+  @@index([type])
+  @@index([region])
+  @@index([expiresAt])
+}
