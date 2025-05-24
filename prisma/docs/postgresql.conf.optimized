@@ -1,0 +1,274 @@
+# =====================================================
+# КОНФИГУРАЦИЯ POSTGRESQL ДЛЯ ВЫСОКОЙ ПРОИЗВОДИТЕЛЬНОСТИ
+# Оптимизированная для мультимедийной платформы AWE
+# =====================================================
+
+# =====================================================
+# ПАМЯТЬ И БУФЕРЫ
+# =====================================================
+
+# Основной буфер для кэширования данных (25% от RAM)
+shared_buffers = 4GB
+
+# Рабочая память для операций сортировки и хеширования
+work_mem = 256MB
+
+# Память для операций maintenance (VACUUM, CREATE INDEX)
+maintenance_work_mem = 1GB
+
+# Буфер для WAL записей
+wal_buffers = 64MB
+
+# Максимальная память для временных файлов
+temp_file_limit = 10GB
+
+# Буфер для операций с большими объектами
+effective_cache_size = 12GB
+
+# =====================================================
+# СОЕДИНЕНИЯ И ПРОЦЕССЫ
+# =====================================================
+
+# Максимальное количество соединений
+max_connections = 200
+
+# Максимальное количество воркеров для параллельных запросов
+max_worker_processes = 8
+max_parallel_workers = 8
+max_parallel_workers_per_gather = 4
+
+# Максимальное количество фоновых процессов
+max_background_jobs = 8
+
+# =====================================================
+# НАСТРОЙКИ WAL И CHECKPOINT
+# =====================================================
+
+# Размер WAL сегментов
+wal_segment_size = 64MB
+
+# Максимальный размер WAL
+max_wal_size = 4GB
+min_wal_size = 1GB
+
+# Настройки checkpoint
+checkpoint_completion_target = 0.9
+checkpoint_timeout = 15min
+
+# Буферы для WAL записей
+wal_writer_delay = 200ms
+wal_writer_flush_after = 1MB
+
+# Синхронизация WAL (для репликации)
+synchronous_commit = off  # Для максимальной производительности
+wal_sync_method = fdatasync
+
+# =====================================================
+# ПЛАНИРОВЩИК ЗАПРОСОВ
+# =====================================================
+
+# Настройки cost-модели
+random_page_cost = 1.1  # Для SSD дисков
+seq_page_cost = 1.0
+cpu_tuple_cost = 0.01
+cpu_index_tuple_cost = 0.005
+cpu_operator_cost = 0.0025
+
+# Настройки статистики для планировщика
+default_statistics_target = 500
+constraint_exclusion = partition
+
+# Включаем более агрессивную оптимизацию
+enable_hashjoin = on
+enable_mergejoin = on
+enable_nestloop = on
+enable_seqscan = on
+enable_sort = on
+
+# =====================================================
+# АВТОВАКУУМ И ОБСЛУЖИВАНИЕ
+# =====================================================
+
+# Включаем автовакуум
+autovacuum = on
+autovacuum_max_workers = 4
+autovacuum_naptime = 30s
+
+# Настройки автовакуума для больших таблиц
+autovacuum_vacuum_threshold = 100
+autovacuum_vacuum_scale_factor = 0.1
+autovacuum_analyze_threshold = 50
+autovacuum_analyze_scale_factor = 0.05
+
+# Более агрессивные настройки для активных таблиц
+autovacuum_vacuum_cost_delay = 10ms
+autovacuum_vacuum_cost_limit = 1000
+
+# =====================================================
+# ЛОГИРОВАНИЕ И МОНИТОРИНГ
+# =====================================================
+
+# Логирование медленных запросов
+log_min_duration_statement = 1000  # 1 секунда
+log_checkpoints = on
+log_connections = on
+log_disconnections = on
+log_lock_waits = on
+
+# Статистика
+track_activities = on
+track_counts = on
+track_io_timing = on
+track_functions = all
+
+# Расширенное логирование для анализа
+log_line_prefix = '%t [%p]: [%l-1] user=%u,db=%d,app=%a,client=%h '
+log_statement = 'ddl'
+log_temp_files = 10MB
+
+# =====================================================
+# СПЕЦИФИЧНЫЕ НАСТРОЙКИ ДЛЯ ПРИЛОЖЕНИЯ
+# =====================================================
+
+# Увеличиваем лимиты для большого количества соединений
+max_prepared_transactions = 200
+max_locks_per_transaction = 256
+
+# Настройки для JSON операций
+gin_pending_list_limit = 4MB
+
+# Увеличиваем буфер для больших транзакций
+max_stack_depth = 7MB
+
+# Настройки для полнотекстового поиска
+default_text_search_config = 'pg_catalog.russian'
+
+# =====================================================
+# РЕПЛИКАЦИЯ (если используется)
+# =====================================================
+
+# Настройки для master сервера
+wal_level = replica
+max_wal_senders = 3
+max_replication_slots = 3
+hot_standby = on
+
+# Настройки для standby серверов
+hot_standby_feedback = on
+max_standby_streaming_delay = 30s
+
+# =====================================================
+# РАСШИРЕНИЯ
+# =====================================================
+
+# Загружаем необходимые расширения
+shared_preload_libraries = 'pg_stat_statements,auto_explain'
+
+# Настройки pg_stat_statements
+pg_stat_statements.max = 10000
+pg_stat_statements.track = all
+pg_stat_statements.save = on
+
+# Настройки auto_explain
+auto_explain.log_min_duration = 5s
+auto_explain.log_analyze = on
+auto_explain.log_buffers = on
+auto_explain.log_timing = on
+auto_explain.log_triggers = on
+auto_explain.log_verbose = on
+
+# =====================================================
+# БЕЗОПАСНОСТЬ И ЛОКАЛИЗАЦИЯ
+# =====================================================
+
+# Настройки безопасности
+ssl = on
+password_encryption = scram-sha-256
+
+# Локализация
+lc_messages = 'ru_RU.UTF-8'
+lc_monetary = 'ru_RU.UTF-8'
+lc_numeric = 'ru_RU.UTF-8'
+lc_time = 'ru_RU.UTF-8'
+
+# Часовой пояс
+timezone = 'Europe/Moscow'
+
+# =====================================================
+# ДОПОЛНИТЕЛЬНЫЕ ОПТИМИЗАЦИИ
+# =====================================================
+
+# Увеличиваем размер hash таблиц
+hash_mem_multiplier = 2.0
+
+# Оптимизация для bulk операций
+bulk_write_ring_size = 256kB
+
+# Настройки для больших результатов
+cursor_tuple_fraction = 0.1
+
+# Оптимизация сортировки
+sort_mem = 32MB
+
+# Настройки для временных таблиц
+temp_tablespaces = ''
+
+# =====================================================
+# МОНИТОРИНГ ПРОИЗВОДИТЕЛЬНОСТИ
+# =====================================================
+
+# Включаем сбор статистики по времени выполнения
+track_commit_timestamp = on
+
+# Сбор статистики по функциям
+track_functions = all
+
+# Детальная статистика по активности
+track_activity_query_size = 2048
+
+# =====================================================
+# НАСТРОЙКИ ДЛЯ СПЕЦИФИЧНЫХ ОПЕРАЦИЙ
+# =====================================================
+
+# Для массовых вставок
+fsync = off  # ТОЛЬКО для массовых загрузок, затем включить обратно!
+full_page_writes = off  # ТОЛЬКО для массовых загрузок!
+
+# Для аналитических запросов
+enable_partitionwise_join = on
+enable_partitionwise_aggregate = on
+
+# Параллельные операции
+parallel_tuple_cost = 0.1
+parallel_setup_cost = 1000.0
+min_parallel_table_scan_size = 8MB
+min_parallel_index_scan_size = 512kB
+
+# =====================================================
+# РЕКОМЕНДАЦИИ ПО ПРИМЕНЕНИЮ
+# =====================================================
+
+# 1. Эти настройки рассчитаны на сервер с 16GB RAM и SSD дисками
+# 2. Перед применением создайте резервную копию текущей конфигурации
+# 3. Применяйте настройки постепенно и мониторьте производительность
+# 4. Настройки fsync=off использовать ТОЛЬКО для массовых загрузок!
+# 5. Регулярно мониторьте логи на предмет ошибок
+# 6. Используйте pg_stat_statements для анализа медленных запросов
+
+# =====================================================
+# КОМАНДЫ ДЛЯ ПРИМЕНЕНИЯ НАСТРОЕК
+# =====================================================
+
+# После изменения конфигурации:
+# 1. sudo systemctl reload postgresql
+# 2. SELECT pg_reload_conf(); -- для некоторых параметров
+# 3. sudo systemctl restart postgresql -- для параметров, требующих перезапуска
+
+# Проверка применения настроек:
+# SELECT name, setting, unit, context FROM pg_settings WHERE name IN (
+#   'shared_buffers', 'work_mem', 'maintenance_work_mem', 'effective_cache_size'
+# );
+
+# Мониторинг производительности:
+# SELECT * FROM pg_stat_database WHERE datname = 'your_database_name';
+# SELECT query, calls, total_time, mean_time FROM pg_stat_statements ORDER BY total_time DESC LIMIT 10;
