@@ -2,8 +2,12 @@ import { Sticker, CustomEmoji, Gif } from '../common.type';
 import { UserInfo } from '../user.type';
 import { MessageType } from './enum.type';
 
+/**
+ * Основная информация о сообщении в чате
+ * Все bigint рекомендуется сериализовать как string для API-ответов
+ */
 export interface MessageInfo {
-  id: bigint;
+  id: bigint; // bigint → string для API
   chatId: bigint;
   senderId: bigint;
   content: Buffer; // Зашифрованный контент
@@ -23,16 +27,23 @@ export interface MessageInfo {
   forwardedFrom?: MessageInfo;
   attachments?: MessageAttachment[];
   reactions?: MessageReaction[];
+  /** Количество реакций (оптимизация для фронта) */
+  reactionCount?: number;
+  /** Количество вложений (оптимизация для фронта) */
+  attachmentCount?: number;
+  /** Признак, что сообщение прочитано пользователем */
+  isRead?: boolean;
 }
 
-export interface MessageList {
+/**
+ * Пагинированный список сообщений (cursor-based)
+ */
+export interface PaginatedMessages {
   messages: MessageInfo[];
-  totalCount: number;
   hasMore: boolean;
-  nextOffset?: string;
-  prevOffset?: string;
-  lastMessageId?: bigint;
-  firstMessageId?: bigint;
+  nextCursor?: string;
+  /** Общее количество сообщений (опционально, для фронта) */
+  totalCount?: number;
 }
 
 export interface MessageAttachment {
@@ -92,10 +103,4 @@ export interface MessageGif {
   gifId: bigint;
   message: MessageInfo;
   gif: Gif;
-}
-
-export interface PaginatedMessages {
-  messages: MessageInfo[];
-  hasMore: boolean;
-  nextCursor?: string;
 }

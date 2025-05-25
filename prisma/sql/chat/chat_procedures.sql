@@ -1,7 +1,17 @@
--- Оптимизированные SQL процедуры для мессенджера
--- Создание высокопроизводительных функций для работы с чатами и сообщениями
 
--- Функция для получения списка чатов пользователя с оптимизацией
+-- =====================
+-- Функция: get_user_chats (ALIGNED WITH PRISMA SCHEMA)
+-- Оптимизации:
+-- 1. Используются только актуальные (неудалённые) чаты и участники
+-- 2. Все поля и типы согласованы с schema.prisma
+-- 3. Исправлен CTE chat_unread_counts (подсчёт непрочитанных сообщений)
+-- 4. Добавлен фильтр по "deletedAt" IS NULL для всех сущностей
+-- 5. Рекомендация: индекс на ("ChatParticipant"."userId", "chatId") WHERE "leftAt" IS NULL
+-- 6. Edge-case: если lastReadMessageId NULL, считаем все сообщения как непрочитанные
+-- 7. Уточнены имена полей (например, type → type, avatarUrl, memberCount и т.д.)
+-- 8. Поддержка поиска и фильтрации по типу чата и тексту
+-- 9. Поддержка only_unread
+-- 10. Все даты в TIMESTAMPTZ(3)
 CREATE OR REPLACE FUNCTION get_user_chats(
   p_user_id BIGINT,
   p_limit INTEGER DEFAULT 50,
@@ -47,7 +57,7 @@ BEGIN
       c."updatedAt",
       cp.role,
       cp.flags as participant_flags,
-      (cp.flags & 2) > 0 as is_muted, -- Проверяем флаг muted
+      (cp.flags & 4) > 0 as is_muted, -- muted(4) по схеме
       cp."lastReadMessageId"
     FROM "Chat" c
     INNER JOIN "ChatParticipant" cp ON c.id = cp."chatId"
@@ -63,13 +73,11 @@ BEGIN
     SELECT 
       uc.id as chat_id,
       COALESCE(
-        (SELECT COUNT(*)
-         FROM "Message" m
-         WHERE m."chatId" = uc.id
-           AND m.id > COALESCE(uc."lastReadMessageId", 0)
-           AND m."senderId" != p_user_id
-           AND m."deletedAt" IS NULL), 
-        0
+        (SELECT COUNT(*) FROM "Message" m
+          WHERE m."chatId" = uc.id
+            AND m."deletedAt" IS NULL
+            AND (uc."lastReadMessageId" IS NULL OR m.id > uc."lastReadMessageId")
+        ), 0
       ) as unread_count
     FROM user_chats uc
   )
@@ -94,12 +102,22 @@ BEGIN
   LEFT JOIN chat_unread_counts cuc ON uc.id = cuc.chat_id
   WHERE (NOT p_only_unread OR cuc.unread_count > 0)
   ORDER BY 
-    CASE WHEN uc."lastMessageAt" IS NULL THEN uc."createdAt" ELSE uc."lastMessageAt" END DESC
+    COALESCE(uc."lastMessageAt", uc."createdAt") DESC
   LIMIT p_limit OFFSET p_offset;
 END;
 $$;
 
--- Функция для получения сообщений чата с оптимизацией
+-- =====================
+-- Функция: get_chat_messages (ALIGNED WITH PRISMA SCHEMA)
+-- Оптимизации:
+-- 1. Все поля и типы согласованы с schema.prisma (например, messageType, replyToId, content - Bytes)
+-- 2. Фильтрация только по актуальным сообщениям ("deletedAt" IS NULL)
+-- 3. Проверка доступа пользователя к чату
+-- 4. Edge-case: если пользователь не участник — ошибка
+-- 5. Поддержка before/after messageId, фильтрация по типу, поиску
+-- 6. Индекс: ("Message"."chatId", "createdAt" DESC) WHERE "deletedAt" IS NULL
+-- 7. Поддержка подсчёта вложений, реакций, отметки о прочтении
+-- 8. Все даты в TIMESTAMPTZ(3)
 CREATE OR REPLACE FUNCTION get_chat_messages(
   p_chat_id BIGINT,
   p_user_id BIGINT,
@@ -108,17 +126,19 @@ CREATE OR REPLACE FUNCTION get_chat_messages(
   p_before_message_id BIGINT DEFAULT NULL,
   p_after_message_id BIGINT DEFAULT NULL,
   p_message_type TEXT DEFAULT NULL,
-  p_search_query TEXT DEFAULT NULL
+  p_search_query TEXT DEFAULT NULL,
+  p_thread_id BIGINT DEFAULT NULL,
+  p_reply_to_id BIGINT DEFAULT NULL
 )
 RETURNS TABLE (
   message_id BIGINT,
   message_type TEXT,
-  content TEXT,
+  content BYTEA,
   sender_id BIGINT,
   sender_username TEXT,
   sender_full_name TEXT,
   sender_avatar_url TEXT,
-  reply_to_message_id BIGINT,
+  reply_to_id BIGINT,
   thread_id BIGINT,
   flags INTEGER,
   created_at TIMESTAMPTZ,
@@ -127,16 +147,17 @@ RETURNS TABLE (
   attachment_count INTEGER,
   reaction_count INTEGER,
   has_user_reaction BOOLEAN,
-  is_read BOOLEAN
+  is_read BOOLEAN,
+  group_id INTEGER
 )
 LANGUAGE plpgsql
 AS $$
 BEGIN
-  -- Проверяем доступ пользователя к чату
+  -- Проверка доступа пользователя к чату
   IF NOT EXISTS (
-    SELECT 1 FROM "ChatParticipant" 
-    WHERE "chatId" = p_chat_id 
-      AND "userId" = p_user_id 
+    SELECT 1 FROM "ChatParticipant"
+    WHERE "chatId" = p_chat_id
+      AND "userId" = p_user_id
       AND "leftAt" IS NULL
   ) THEN
     RAISE EXCEPTION 'User does not have access to this chat';
@@ -146,75 +167,124 @@ BEGIN
   WITH filtered_messages AS (
     SELECT 
       m.id,
-      m.type,
+      m."messageType",
       m.content,
       m."senderId",
-      m."replyToMessageId",
+      m."replyToId",
       m."threadId",
       m.flags,
       m."createdAt",
       m."updatedAt",
       m."editedAt",
-      u.username as sender_username,
-      u."fullName" as sender_full_name,
-      u."avatarUrl" as sender_avatar_url
+      u.username AS sender_username,
+      u."fullName" AS sender_full_name,
+      u."avatarUrl" AS sender_avatar_url
     FROM "Message" m
-    INNER JOIN "User" u ON m."senderId" = u.id
+    INNER JOIN "User" u ON u.id = m."senderId"
     WHERE m."chatId" = p_chat_id
       AND m."deletedAt" IS NULL
       AND (p_before_message_id IS NULL OR m.id < p_before_message_id)
       AND (p_after_message_id IS NULL OR m.id > p_after_message_id)
-      AND (p_message_type IS NULL OR m.type::text = p_message_type)
-      AND (p_search_query IS NULL OR m.content ILIKE '%' || p_search_query || '%')
-    ORDER BY m.id DESC
+      AND (p_message_type IS NULL OR m."messageType"::text = p_message_type)
+      AND (p_thread_id IS NULL OR m."threadId" = p_thread_id)
+      AND (p_reply_to_id IS NULL OR m."replyToId" = p_reply_to_id)
+      AND (
+        p_search_query IS NULL OR 
+        EXISTS (
+          SELECT 1 FROM "MessageSearch"
+          WHERE "messageId" = m.id AND "searchText" ILIKE '%' || p_search_query || '%'
+        )
+      )
+    ORDER BY m.id ASC
     LIMIT p_limit OFFSET p_offset
+  ),
+  message_groups AS (
+    SELECT
+      fm.*,
+      COALESCE(
+        SUM(
+          CASE 
+            WHEN 
+              EXTRACT(EPOCH FROM (fm."createdAt" - LAG(fm."createdAt") OVER (ORDER BY fm.id))) > 300 OR 
+              LAG(fm."senderId") OVER (ORDER BY fm.id) IS DISTINCT FROM fm."senderId"
+            THEN 1 ELSE 0
+          END
+        ) OVER (ORDER BY fm.id ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW),
+        0
+      ) AS group_id
+    FROM filtered_messages fm
   ),
   message_stats AS (
     SELECT 
-      fm.id as message_id,
-      COALESCE(
-        (SELECT COUNT(*) FROM "MessageAttachment" ma WHERE ma."messageId" = fm.id), 
-        0
-      ) as attachment_count,
-      COALESCE(
-        (SELECT COUNT(*) FROM "MessageReaction" mr WHERE mr."messageId" = fm.id), 
-        0
-      ) as reaction_count,
-      EXISTS(
-        SELECT 1 FROM "MessageReaction" mr 
-        WHERE mr."messageId" = fm.id AND mr."userId" = p_user_id
-      ) as has_user_reaction,
-      EXISTS(
-        SELECT 1 FROM "MessageRead" mr 
-        WHERE mr."messageId" = fm.id AND mr."userId" = p_user_id
-      ) as is_read
-    FROM filtered_messages fm
+      mg.id AS message_id,
+      mg.group_id,
+      (SELECT COUNT(*) FROM "MessageAttachment" ma WHERE ma."messageId" = mg.id) AS attachment_count,
+      (SELECT COUNT(*) FROM "MessageReaction" mr WHERE mr."messageId" = mg.id) AS reaction_count,
+      EXISTS (
+        SELECT 1 FROM "MessageReaction" mr WHERE mr."messageId" = mg.id AND mr."userId" = p_user_id
+      ) AS has_user_reaction,
+      EXISTS (
+        SELECT 1 FROM "MessageRead" mr WHERE mr."messageId" = mg.id AND mr."userId" = p_user_id
+      ) AS is_read
+    FROM message_groups mg
   )
   SELECT 
-    fm.id,
-    fm.type::text,
-    fm.content,
-    fm."senderId",
-    fm.sender_username,
-    fm.sender_full_name,
-    fm.sender_avatar_url,
-    fm."replyToMessageId",
-    fm."threadId",
-    fm.flags,
-    fm."createdAt",
-    fm."updatedAt",
-    fm."editedAt",
-    ms.attachment_count::integer,
-    ms.reaction_count::integer,
+    mg.id,
+    mg."messageType"::text,
+    mg.content,
+    mg."senderId",
+    mg.sender_username,
+    mg.sender_full_name,
+    mg.sender_avatar_url,
+    mg."replyToId",
+    mg."threadId",
+    mg.flags,
+    mg."createdAt",
+    mg."updatedAt",
+    mg."editedAt",
+    ms.attachment_count::INTEGER,
+    ms.reaction_count::INTEGER,
     ms.has_user_reaction,
-    ms.is_read
-  FROM filtered_messages fm
-  LEFT JOIN message_stats ms ON fm.id = ms.message_id
-  ORDER BY fm.id ASC;
+    ms.is_read,
+    mg.group_id
+  FROM message_groups mg
+  LEFT JOIN message_stats ms ON ms.message_id = mg.id
+  ORDER BY mg.id ASC;
 END;
 $$;
 
+
+-- =====================
 -- Функция для создания чата с оптимизированными операциями
+--
+-- @function create_optimized_chat
+-- @desc Создаёт новый чат с заданными параметрами и участниками.
+-- @params
+--   p_creator_id      BIGINT      -- ID пользователя-создателя (обязателен)
+--   p_chat_type       TEXT        -- Тип чата (GROUP, PRIVATE, CHANNEL и т.д.)
+--   p_title           TEXT        -- Название чата (опционально)
+--   p_description     TEXT        -- Описание чата (опционально)
+--   p_participant_ids BIGINT[]    -- Массив ID участников (опционально)
+--   p_is_public       BOOLEAN     -- Флаг публичности (по умолчанию FALSE)
+--   p_invite_link     TEXT        -- Ссылка-приглашение (опционально)
+-- @returns
+--   chat_id           BIGINT      -- ID созданного чата
+--   success           BOOLEAN     -- Признак успеха
+--   error_message     TEXT        -- Сообщение об ошибке (NULL если успех)
+--
+-- @indexes
+--   Рекомендуется индекс на ("Chat".type, "deletedAt")
+--   Индекс на ("ChatParticipant"."chatId", "userId") WHERE "leftAt" IS NULL
+--
+-- @edge-cases
+--   - Если участник не существует или удалён — не добавляется
+--   - Если массив участников пуст — создаётся только с создателем
+--   - Если чат с такими параметрами уже есть — создаётся новый (нет уникальности)
+--   - Если ошибка — возвращается error_message
+--
+-- @support
+--   - Для масштабируемости рекомендуется ограничивать размер p_participant_ids
+--   - Для поддержки транзакций обернуть вызов в BEGIN/COMMIT на уровне приложения
 CREATE OR REPLACE FUNCTION create_optimized_chat(
   p_creator_id BIGINT,
   p_chat_type TEXT,
@@ -236,6 +306,12 @@ DECLARE
   v_participant_id BIGINT;
   v_flags INTEGER := 0;
 BEGIN
+  -- Проверка: создатель существует и не удалён
+  IF NOT EXISTS (SELECT 1 FROM "User" WHERE id = p_creator_id AND "deletedAt" IS NULL) THEN
+    RETURN QUERY SELECT NULL::BIGINT, FALSE, 'Creator does not exist or deleted';
+    RETURN;
+  END IF;
+
   -- Устанавливаем флаги
   IF p_is_public THEN
     v_flags := v_flags | 2; -- public flag
@@ -258,7 +334,7 @@ BEGIN
     p_description,
     v_flags,
     p_invite_link,
-    1 + array_length(p_participant_ids, 1)
+    1 + COALESCE(array_length(p_participant_ids, 1), 0)
   )
   RETURNING id INTO v_chat_id;
 
@@ -282,7 +358,7 @@ BEGIN
   IF array_length(p_participant_ids, 1) > 0 THEN
     FOREACH v_participant_id IN ARRAY p_participant_ids
     LOOP
-      -- Проверяем, что пользователь существует
+      -- Проверяем, что пользователь существует и не удалён
       IF EXISTS (SELECT 1 FROM "User" WHERE id = v_participant_id AND "deletedAt" IS NULL) THEN
         INSERT INTO "ChatParticipant" (
           "chatId",
@@ -311,7 +387,35 @@ EXCEPTION
 END;
 $$;
 
+-- =====================
 -- Функция для отправки сообщения с оптимизацией
+--
+-- @function send_optimized_message
+-- @desc Отправляет сообщение в чат, обновляет метаданные чата.
+-- @params
+--   p_chat_id              BIGINT      -- ID чата
+--   p_sender_id            BIGINT      -- ID отправителя
+--   p_message_type         TEXT        -- Тип сообщения (TEXT, IMAGE и т.д.)
+--   p_content              TEXT        -- Контент (зашифрованный, base64/hex)
+--   p_reply_to_message_id  BIGINT      -- ID сообщения-ответа (опционально)
+--   p_thread_id            BIGINT      -- ID треда (опционально)
+--   p_flags                INTEGER     -- Флаги (опционально)
+-- @returns
+--   message_id             BIGINT      -- ID созданного сообщения
+--   success                BOOLEAN     -- Признак успеха
+--   error_message          TEXT        -- Сообщение об ошибке
+--
+-- @indexes
+--   Индекс на ("Message"."chatId", "createdAt" DESC) WHERE "deletedAt" IS NULL
+--
+-- @edge-cases
+--   - Если пользователь не участник чата или неактивен — ошибка
+--   - Если чат или пользователь удалён — ошибка
+--   - Если reply_to_message_id не существует — игнорируется
+--   - Если ошибка — возвращается error_message
+--
+-- @support
+--   - Для поддержки транзакций рекомендуется оборачивать в BEGIN/COMMIT
 CREATE OR REPLACE FUNCTION send_optimized_message(
   p_chat_id BIGINT,
   p_sender_id BIGINT,
@@ -331,15 +435,23 @@ AS $$
 DECLARE
   v_message_id BIGINT;
 BEGIN
-  -- Проверяем доступ пользователя к чату
+  -- Проверяем доступ пользователя к чату и что чат не удалён
   IF NOT EXISTS (
-    SELECT 1 FROM "ChatParticipant" 
-    WHERE "chatId" = p_chat_id 
-      AND "userId" = p_sender_id 
-      AND "leftAt" IS NULL
-      AND (flags & 1) > 0 -- active flag
+    SELECT 1 FROM "ChatParticipant" cp
+    INNER JOIN "Chat" c ON cp."chatId" = c.id
+    WHERE cp."chatId" = p_chat_id 
+      AND cp."userId" = p_sender_id 
+      AND cp."leftAt" IS NULL
+      AND (cp.flags & 1) > 0 -- active flag
+      AND c."deletedAt" IS NULL
   ) THEN
     RETURN QUERY SELECT NULL::BIGINT, FALSE, 'User does not have access to this chat'::TEXT;
+    RETURN;
+  END IF;
+
+  -- Проверяем, что отправитель существует и не удалён
+  IF NOT EXISTS (SELECT 1 FROM "User" WHERE id = p_sender_id AND "deletedAt" IS NULL) THEN
+    RETURN QUERY SELECT NULL::BIGINT, FALSE, 'Sender does not exist or deleted';
     RETURN;
   END IF;
 
@@ -383,7 +495,31 @@ EXCEPTION
 END;
 $$;
 
+-- =====================
 -- Функция для получения участников чата
+--
+-- @function get_chat_participants
+-- @desc Возвращает список участников чата с их ролями, статусом и статистикой.
+-- @params
+--   p_chat_id      BIGINT      -- ID чата
+--   p_user_id      BIGINT      -- ID пользователя (для проверки доступа)
+--   p_limit        INTEGER     -- Лимит (по умолчанию 100)
+--   p_offset       INTEGER     -- Смещение (по умолчанию 0)
+--   p_role_filter  TEXT        -- Фильтр по роли (опционально)
+-- @returns
+--   user_id, username, full_name, avatar_url, role, flags, joined_at, last_seen, is_online, message_count
+--
+-- @indexes
+--   Индекс на ("ChatParticipant"."chatId", "userId") WHERE "leftAt" IS NULL
+--   Индекс на ("User"."lastSeen")
+--
+-- @edge-cases
+--   - Если пользователь не участник — ошибка
+--   - Если участник удалён — не возвращается
+--   - Если роль не указана — возвращаются все
+--
+-- @support
+--   - Для масштабируемых чатов рекомендуется использовать пагинацию по id
 CREATE OR REPLACE FUNCTION get_chat_participants(
   p_chat_id BIGINT,
   p_user_id BIGINT,
@@ -428,7 +564,7 @@ BEGIN
     u."lastSeen",
     (u.flags & 4) > 0 as is_online, -- online flag
     COALESCE(
-      (SELECT COUNT(*) FROM "Message" m WHERE m."chatId" = p_chat_id AND m."senderId" = u.id),
+      (SELECT COUNT(*) FROM "Message" m WHERE m."chatId" = p_chat_id AND m."senderId" = u.id AND m."deletedAt" IS NULL),
       0
     ) as message_count
   FROM "ChatParticipant" cp
@@ -449,7 +585,32 @@ BEGIN
 END;
 $$;
 
+-- =====================
 -- Функция для поиска чатов
+--
+-- @function search_chats
+-- @desc Поиск чатов по названию и описанию с ранжированием по релевантности и популярности.
+-- @params
+--   p_user_id      BIGINT      -- ID пользователя (для отметки is_member)
+--   p_search_query TEXT        -- Поисковый запрос
+--   p_limit        INTEGER     -- Лимит (по умолчанию 20)
+--   p_offset       INTEGER     -- Смещение (по умолчанию 0)
+--   p_chat_type    TEXT        -- Фильтр по типу (опционально)
+--   p_public_only  BOOLEAN     -- Только публичные (по умолчанию FALSE)
+-- @returns
+--   chat_id, chat_type, title, description, avatar_url, member_count, is_member, relevance_score
+--
+-- @indexes
+--   Индекс GIN на (title || description) для полнотекстового поиска
+--   Индекс на ("Chat".type, "deletedAt")
+--
+-- @edge-cases
+--   - Если чат удалён — не возвращается
+--   - Если релевантность 0 — не возвращается
+--   - Если пользователь не участник — is_member = false
+--
+-- @support
+--   - Для масштабируемости рекомендуется ограничивать p_limit
 CREATE OR REPLACE FUNCTION search_chats(
   p_user_id BIGINT,
   p_search_query TEXT,
@@ -491,7 +652,7 @@ BEGIN
         CASE WHEN c.title ILIKE p_search_query THEN 10.0 ELSE 0.0 END +
         CASE WHEN c.title ILIKE '%' || p_search_query || '%' THEN 5.0 ELSE 0.0 END +
         CASE WHEN c.description ILIKE '%' || p_search_query || '%' THEN 2.0 ELSE 0.0 END +
-        -- Бонус за популярность
+        -- Бонус за популярности
         LOG(GREATEST(c."memberCount", 1)) * 0.1
       ) as relevance_score
     FROM "Chat" c
@@ -519,7 +680,29 @@ BEGIN
 END;
 $$;
 
+-- =====================
 -- Функция для получения статистики чата
+--
+-- @function get_chat_statistics
+-- @desc Возвращает агрегированную статистику по чату: сообщения, участники, активность.
+-- @params
+--   p_chat_id      BIGINT      -- ID чата
+--   p_user_id      BIGINT      -- ID пользователя (для проверки доступа)
+-- @returns
+--   total_messages, total_participants, active_participants, messages_today, messages_this_week,
+--   most_active_user_id, most_active_user_name, most_active_user_count, average_messages_per_day, peak_activity_hour
+--
+-- @indexes
+--   Индекс на ("Message"."chatId", "createdAt") WHERE "deletedAt" IS NULL
+--   Индекс на ("ChatParticipant"."chatId", "userId") WHERE "leftAt" IS NULL
+--
+-- @edge-cases
+--   - Если пользователь не участник — ошибка
+--   - Если чат удалён — ошибка
+--   - Если сообщений нет — значения = 0
+--
+-- @support
+--   - Для больших чатов рекомендуется кэшировать статистику
 CREATE OR REPLACE FUNCTION get_chat_statistics(
   p_chat_id BIGINT,
   p_user_id BIGINT
@@ -544,10 +727,12 @@ DECLARE
 BEGIN
   -- Проверяем доступ
   IF NOT EXISTS (
-    SELECT 1 FROM "ChatParticipant" 
-    WHERE "chatId" = p_chat_id 
-      AND "userId" = p_user_id 
-      AND "leftAt" IS NULL
+    SELECT 1 FROM "ChatParticipant" cp
+    INNER JOIN "Chat" c ON cp."chatId" = c.id
+    WHERE cp."chatId" = p_chat_id 
+      AND cp."userId" = p_user_id 
+      AND cp."leftAt" IS NULL
+      AND c."deletedAt" IS NULL
   ) THEN
     RAISE EXCEPTION 'User does not have access to this chat';
   END IF;
@@ -555,7 +740,6 @@ BEGIN
   -- Получаем дату создания чата
   SELECT "createdAt" INTO v_chat_created_at
   FROM "Chat" WHERE id = p_chat_id;
-  
   v_days_since_creation := GREATEST(DATE_PART('day', NOW() - v_chat_created_at), 1);
 
   RETURN QUERY

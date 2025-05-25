@@ -105,4 +105,52 @@ export class MessangerRepository {
       WHERE r.id IS NULL AND m."deletedAt" IS NULL
       GROUP BY m."chatId"`;
   }
+
+  async globalSearchMessagesRaw(
+    query: string,
+    options: {
+      userId?: bigint;
+      limit?: number;
+      offset?: number;
+      chatId?: bigint;
+      senderId?: bigint;
+      dateFrom?: Date;
+      dateTo?: Date;
+    } = {},
+  ) {
+    return this.prisma.$queryRaw<Array<any>>`
+      SELECT * FROM global_search_messages(
+        ${options.userId ?? null}::bigint,
+        ${query}::text,
+        ${options.limit ?? 50}::integer,
+        ${options.offset ?? 0}::integer,
+        ${options.chatId ?? null}::bigint,
+        ${options.senderId ?? null}::bigint,
+        ${options.dateFrom ?? null}::timestamptz,
+        ${options.dateTo ?? null}::timestamptz
+      )
+    `;
+  }
+
+  async globalSearchChatsRaw(
+    query: string,
+    options: {
+      userId?: bigint;
+      limit?: number;
+      offset?: number;
+      type?: string;
+      publicOnly?: boolean;
+    } = {},
+  ) {
+    return this.prisma.$queryRaw<Array<any>>`
+      SELECT * FROM global_search_chats(
+        ${options.userId ?? null}::bigint,
+        ${query}::text,
+        ${options.limit ?? 50}::integer,
+        ${options.offset ?? 0}::integer,
+        ${options.type ?? null}::text,
+        ${options.publicOnly ?? false}::boolean
+      )
+    `;
+  }
 }

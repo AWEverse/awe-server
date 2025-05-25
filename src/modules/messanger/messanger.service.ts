@@ -49,10 +49,6 @@ export class MessangerService implements IChatService {
     throw new Error('Method not implemented.');
   }
 
-  // ===============================================
-  // УПРАВЛЕНИЕ ЧАТАМИ - ОПТИМИЗИРОВАННЫЕ МЕТОДЫ
-  // ===============================================
-
   async createChat(
     userId: bigint,
     type: ChatType,
@@ -88,7 +84,6 @@ export class MessangerService implements IChatService {
 
       const chatId = result[0].chat_id;
 
-      // Получаем созданный чат
       const chat = await this.prisma.chat.findUnique({
         where: { id: chatId },
         include: {
@@ -153,7 +148,6 @@ export class MessangerService implements IChatService {
       avatarUrl?: string;
     },
   ): Promise<ChatInfo> {
-    // Проверяем права на редактирование
     const hasAccess = await this.checkChatAccess(chatId, userId);
     if (!hasAccess) {
       throw new ForbiddenException('No permission to edit this chat');
@@ -228,7 +222,6 @@ export class MessangerService implements IChatService {
       options?.onlyUnread,
     );
 
-    // Получаем информацию о создателях чатов
     const chatIds = chats.map(chat => chat.chat_id);
     const chatCreators = await this.prisma.chat.findMany({
       where: { id: { in: chatIds } },
@@ -247,7 +240,6 @@ export class MessangerService implements IChatService {
     });
     const creatorsMap = new Map(chatCreators.map(chat => [chat.id, chat.createdBy]));
 
-    // Формируем список чатов
     return chats.map(chat => {
       const creator = creatorsMap.get(chat.chat_id);
       const formattedCreator: UserInfo = creator
@@ -278,16 +270,13 @@ export class MessangerService implements IChatService {
         memberCount: chat.member_count || 0,
         lastMessageAt: chat.last_message_at || undefined,
         lastMessageText: chat.last_message_text || undefined,
-        inviteLink: undefined, // Не возвращается в этом запросе
+        inviteLink: undefined,
         createdAt: chat.created_at,
         createdBy: formattedCreator,
       };
     });
   }
 
-  // ===============================================
-  // УПРАВЛЕНИЕ СООБЩЕНИЯМИ - ОПТИМИЗИРОВАННЫЕ МЕТОДЫ
-  // ===============================================
   async sendMessage(
     chatId: bigint,
     senderId: bigint,
@@ -301,11 +290,9 @@ export class MessangerService implements IChatService {
     },
   ): Promise<MessageInfo> {
     try {
-      // Convert content to string if it's a Buffer
       const contentStr = typeof content === 'string' ? content : content.toString();
       const msgType = messageType || MessageType.TEXT;
 
-      // Используем оптимизированную SQL функцию
       const result = await this.prisma.$queryRaw<
         Array<{
           message_id: bigint;
@@ -330,7 +317,6 @@ export class MessangerService implements IChatService {
 
       const messageId = result[0].message_id;
 
-      // Получаем отправленное сообщение
       const message = await this.prisma.message.findUnique({
         where: { id: messageId },
         include: {
@@ -410,13 +396,12 @@ export class MessangerService implements IChatService {
       options?.searchQuery,
     );
 
-    // Преобразуем в MessageInfo
     const formattedMessages: MessageInfo[] = messages.map(msg => ({
       id: msg.message_id,
       chatId: chatId,
       senderId: msg.sender_id,
-      content: Buffer.from(msg.content), // Преобразуем в Buffer
-      header: Buffer.alloc(0), // Пустой header
+      content: Buffer.from(msg.content),
+      header: Buffer.alloc(0),
       messageType: msg.message_type as MessageType,
       flags: msg.flags,
       createdAt: msg.created_at,
@@ -435,7 +420,7 @@ export class MessangerService implements IChatService {
         flags: 0,
         lastSeen: undefined,
       },
-      replyTo: undefined, // Загружается отдельно при необходимости
+      replyTo: undefined,
       attachments: [],
       reactions: [],
     }));
@@ -475,10 +460,6 @@ export class MessangerService implements IChatService {
     };
   }
 
-  // ===============================================
-  // УЧАСТНИКИ ЧАТА - ОПТИМИЗИРОВАННЫЕ МЕТОДЫ
-  // ===============================================
-
   async getChatParticipants(
     chatId: bigint,
     userId: bigint,
@@ -498,7 +479,7 @@ export class MessangerService implements IChatService {
       options?.roleFilter,
     );
     return participants.map(p => ({
-      id: BigInt(0), // ID участника не возвращается функцией
+      id: BigInt(0),
       chatId: chatId,
       userId: p.user_id,
       role: p.role as ChatRole,
@@ -523,13 +504,11 @@ export class MessangerService implements IChatService {
     addedById: bigint,
     role?: ChatRole,
   ): Promise<boolean> {
-    // Проверяем права на добавление участников
     const hasAccess = await this.checkChatAccess(chatId, userId);
     if (!hasAccess) {
       throw new ForbiddenException('No permission to add members');
     }
 
-    // Проверяем, что пользователь еще не участник чата
     const existingParticipant = await this.prisma.chatParticipant.findFirst({
       where: {
         chatId,
@@ -551,7 +530,6 @@ export class MessangerService implements IChatService {
       },
     });
 
-    // Обновляем счетчик участников
     await this.prisma.chat.update({
       where: { id: chatId },
       data: {
@@ -589,7 +567,6 @@ export class MessangerService implements IChatService {
       },
     });
 
-    // Обновляем счетчик участников
     await this.prisma.chat.update({
       where: { id: chatId },
       data: {
@@ -601,10 +578,6 @@ export class MessangerService implements IChatService {
 
     return true;
   }
-
-  // ===============================================
-  // ПОИСК И СТАТИСТИКА - ОПТИМИЗИРОВАННЫЕ МЕТОДЫ
-  // ===============================================
 
   async searchChats(
     userId: bigint,
@@ -653,10 +626,6 @@ export class MessangerService implements IChatService {
   async getChatStatistics(chatId: bigint, userId: bigint): Promise<ChatStatistics> {
     throw new Error('Method not implemented.');
   }
-
-  // ===============================================
-  // ВСПОМОГАТЕЛЬНЫЕ МЕТОДЫ
-  // ===============================================
 
   private async checkChatAccess(chatId: bigint, userId: bigint): Promise<boolean> {
     const participant = await this.prisma.chatParticipant.findFirst({
@@ -742,10 +711,6 @@ export class MessangerService implements IChatService {
     };
   }
 
-  // ===============================================
-  // РЕАЛИЗАЦИЯ ОСТАЛЬНЫХ МЕТОДОВ ИНТЕРФЕЙСА
-  // ===============================================
-
   async markMessagesAsRead(chatId: bigint, userId: bigint, upToMessageId: bigint): Promise<number> {
     const result = await this.prisma.messageRead.createMany({
       data: [
@@ -771,7 +736,7 @@ export class MessangerService implements IChatService {
   ): Promise<{ chats: ChatInfo[]; messages: MessageInfo[] }> {
     const limit = options?.limit ?? 50;
     const offset = options?.offset ?? 0;
-    // Поиск чатов
+
     const chats = await this.prisma.chat.findMany({
       where: {
         participants: { some: { userId, leftAt: undefined } },
@@ -785,7 +750,7 @@ export class MessangerService implements IChatService {
       take: limit,
       skip: offset,
     });
-    // Поиск сообщений
+
     const messages = await this.prisma.message.findMany({
       where: {
         chat: {
@@ -794,7 +759,7 @@ export class MessangerService implements IChatService {
           ...(options?.chatType && { type: options.chatType }),
         },
         deletedAt: undefined,
-        content: { equals: Buffer.from(query) }, // Для полнотекстового поиска нужен отдельный механизм
+        content: { equals: Buffer.from(query) },
       },
       include: { sender: true, attachments: true, reactions: true },
       take: limit,
@@ -1232,20 +1197,6 @@ export class MessangerService implements IChatService {
       data: { deletedAt: new Date(), flags: { increment: 1 } },
     });
     return deleted.count;
-  }
-
-  async exportChatHistory(
-    chatId: bigint,
-    userId: bigint,
-    format: 'json' | 'csv' | 'html',
-    options?: { startDate?: Date; endDate?: Date; includeMedia?: boolean },
-  ): Promise<{ url: string; expiresAt: Date; fileSize: number }> {
-    // Заглушка: возвращаем фиктивную ссылку
-    return {
-      url: `https://cdn.example.com/export/${chatId}.${format}`,
-      expiresAt: new Date(Date.now() + 3600 * 1000),
-      fileSize: 123456,
-    };
   }
 
   async checkUserPermissions(

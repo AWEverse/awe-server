@@ -336,24 +336,6 @@ export interface IChatService {
    */
   getUserStatistics(userId: bigint, requesterId: bigint): Promise<UserChatStatistics>;
 
-  /**
-   * Экспортировать историю чата
-   */
-  exportChatHistory(
-    chatId: bigint,
-    userId: bigint,
-    format: 'json' | 'csv' | 'html',
-    options?: {
-      startDate?: Date;
-      endDate?: Date;
-      includeMedia?: boolean;
-    },
-  ): Promise<{
-    url: string;
-    expiresAt: Date;
-    fileSize: number;
-  }>;
-
   // ===============================================
   // НАСТРОЙКИ
   // ===============================================
