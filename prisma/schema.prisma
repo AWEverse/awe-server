@@ -69,6 +69,8 @@ enum MessageType {
   EMOJI
   GIF
   MARKDOWN
+  CUSTOM_EMOJI
+  STICKER_PACK
 }
 
 enum ContentType {
@@ -179,7 +181,7 @@ model RoleGlobally {
 
 model User {
   id           BigInt  @id @default(autoincrement())
-  email        String  @unique @db.VarChar(254)
+  email        String  @unique @db.VarChar(320) // RFC 5321 compliant
   username     String  @unique @db.VarChar(32)
   passwordHash String? @db.VarChar(128)
   fullName     String? @db.VarChar(128)
@@ -190,6 +192,7 @@ model User {
   phoneNumber  String? @unique @db.VarChar(15)
 
   // Битовые флаги: verified(1), bot(2), online(4), creator(8), live(16), premium(32), staff(64)
+  // ВАЖНО: Максимум 31 флаг для Int (2^31-1)
   flags  Int        @default(0)
   status UserStatus @default(ACTIVE)
 
@@ -259,6 +262,13 @@ model User {
   forumReputation    ForumReputation?         @relation("UserReputation")
   forumNotifications ForumNotificationQueue[] @relation("ForumNotifications")
 
+  // Stickers, Emojis и Media
+  createdStickerPacks StickerPack[]     @relation("CreatedStickerPacks")
+  stickerPurchases    StickerPurchase[]
+  userStickerPacks    UserStickerPack[]
+  createdEmojis       CustomEmoji[]     @relation("CreatedEmojis")
+  chatFolders         ChatFolder[]      @relation("UserFolders")
+
   // Security
   securityAudits      SecurityAuditLog[] @relation("SecurityAudits")
   securityResolutions SecurityAuditLog[] @relation("SecurityResolver")
@@ -286,7 +296,7 @@ model Device {
   deviceType    String?   @db.VarChar(32)
   deviceVersion String?   @db.VarChar(32)
   ipAddress     String?   @db.Inet
-  userAgent     String?   @db.VarChar(255)
+  userAgent     String?   @db.VarChar(512) // Увеличено для современных UA
   flags         Int       @default(1) // isActive(1), trusted(2)
   lastUsed      DateTime? @db.Timestamptz(3)
   createdAt     DateTime  @default(now()) @db.Timestamptz(3)
@@ -297,7 +307,7 @@ model Device {
 
   @@index([userId])
   @@index([deviceId])
-  @@index([userId, flags])
+  @@index([userId, flags]) // Составной индекс включает простой
   @@index([lastUsed])
 }
 
@@ -323,7 +333,7 @@ model Session {
 }
 
 model UserCrypto {
-  id                String   @id @default(uuid())
+  id                BigInt   @id @default(autoincrement())
   userId            BigInt   @unique
   identityKeyPublic String   @db.VarChar(128)
   createdAt         DateTime @default(now()) @db.Timestamptz(3)
@@ -339,7 +349,7 @@ model UserCrypto {
 
 model SignedPreKey {
   id           BigInt    @id @default(autoincrement())
-  userCryptoId String
+  userCryptoId BigInt
   keyId        Int
   publicKey    String    @db.VarChar(128)
   signature    String    @db.VarChar(128)
@@ -357,7 +367,7 @@ model SignedPreKey {
 
 model OneTimePreKey {
   id           BigInt   @id @default(autoincrement())
-  userCryptoId String
+  userCryptoId BigInt
   keyId        Int
   publicKey    String   @db.VarChar(128)
   createdAt    DateTime @default(now()) @db.Timestamptz(3)
@@ -373,7 +383,7 @@ model OneTimePreKey {
 
 model UsedOneTimePreKey {
   id           BigInt   @id @default(autoincrement())
-  userCryptoId String
+  userCryptoId BigInt
   keyId        Int
   usedAt       DateTime @default(now()) @db.Timestamptz(3)
 
@@ -412,6 +422,8 @@ model Chat {
   pinnedMessage        Message?               @relation("PinnedMessage", fields: [pinnedMessageId], references: [id])
   chatSettings         ChatSettings?
   notificationSettings NotificationSettings[]
+  customEmojis         CustomEmoji[]          @relation("CustomEmojis")
+  folderItems          ChatFolderItem[]       @relation("FolderItems")
 
   @@index([type])
   @@index([createdById])
@@ -466,19 +478,23 @@ model Message {
   replyToId       BigInt?
   forwardedFromId BigInt?
   threadId        BigInt? // Для тредов в чатах
+  replyDepth      Int     @default(0) // Глубина вложенности ответов (макс 10)
 
-  chat          Chat                @relation(fields: [chatId], references: [id], onDelete: Cascade)
-  sender        User                @relation("messagesSent", fields: [senderId], references: [id])
-  replyTo       Message?            @relation("ReplyTo", fields: [replyToId], references: [id])
-  replies       Message[]           @relation("ReplyTo")
-  forwardedFrom Message?            @relation("ForwardedFrom", fields: [forwardedFromId], references: [id])
-  forwards      Message[]           @relation("ForwardedFrom")
-  thread        MessageThread?      @relation("ThreadMessage", fields: [threadId], references: [id])
-  attachments   MessageAttachment[]
-  reactions     MessageReaction[]
-  edits         MessageEdit[]
-  pinnedIn      Chat[]              @relation("PinnedMessage")
-  messageReads  MessageRead[]
+  chat            Chat                @relation(fields: [chatId], references: [id], onDelete: Cascade)
+  sender          User                @relation("messagesSent", fields: [senderId], references: [id])
+  replyTo         Message?            @relation("ReplyTo", fields: [replyToId], references: [id])
+  replies         Message[]           @relation("ReplyTo")
+  forwardedFrom   Message?            @relation("ForwardedFrom", fields: [forwardedFromId], references: [id])
+  forwards        Message[]           @relation("ForwardedFrom")
+  thread          MessageThread?      @relation("ThreadMessage", fields: [threadId], references: [id])
+  attachments     MessageAttachment[]
+  reactions       MessageReaction[]
+  edits           MessageEdit[]
+  pinnedIn        Chat[]              @relation("PinnedMessage")
+  messageReads    MessageRead[]
+  messageStickers MessageSticker[]
+  messageEmojis   MessageEmoji[]
+  messageGifs     MessageGif[]
 
   @@index([chatId, createdAt])
   @@index([senderId])
@@ -487,6 +503,7 @@ model Message {
   @@index([replyToId])
   @@index([forwardedFromId])
   @@index([threadId])
+  @@index([replyDepth]) // Для ограничения глубины
   @@index([chatId, flags, createdAt])
   @@index([deletedAt])
 }
@@ -497,7 +514,7 @@ model MessageThread {
   creatorId BigInt
   title     String?  @db.VarChar(128)
   createdAt DateTime @default(now()) @db.Timestamptz(3)
-  updatedAt DateTime @updatedAt @db.Timestamptz(3)
+  updatedAt DateTime @default(now()) @updatedAt @db.Timestamptz(3)
   flags     Int      @default(0) // active(1), locked(2)
 
   messages Message[] @relation("ThreadMessage")
@@ -546,7 +563,7 @@ model MessageReaction {
   id        BigInt   @id @default(autoincrement())
   messageId BigInt
   userId    BigInt
-  reaction  String   @db.VarChar(8)
+  reaction  String   @db.VarChar(32) // Например, "👍", "❤️", "😂" 
   createdAt DateTime @default(now()) @db.Timestamptz(3)
 
   message Message @relation(fields: [messageId], references: [id], onDelete: Cascade)
@@ -572,6 +589,291 @@ model MessageRead {
   @@index([userId])
   @@index([readAt])
   @@index([userId, readAt])
+}
+
+// ===== СТИКЕРЫ, ЭМОДЖИ И МЕДИА =====
+
+model StickerPack {
+  id           BigInt  @id @default(autoincrement())
+  name         String  @db.VarChar(64)
+  title        String  @db.VarChar(128)
+  description  String? @db.VarChar(255)
+  authorId     BigInt?
+  thumbnailUrl String  @db.VarChar(512)
+
+  // Битовые флаги: premium(1), animated(2), official(4), nsfw(8), disabled(16)
+  flags    Int     @default(0)
+  price    Int     @default(0) // В центах, 0 = бесплатно
+  category String? @db.VarChar(32)
+  tags     String? @db.VarChar(255) // Теги через запятую
+
+  downloadCount Int @default(0)
+  usageCount    Int @default(0)
+
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @db.Timestamptz(3)
+
+  author    User?             @relation("CreatedStickerPacks", fields: [authorId], references: [id])
+  stickers  Sticker[]
+  purchases StickerPurchase[]
+  userPacks UserStickerPack[]
+
+  @@index([authorId])
+  @@index([flags])
+  @@index([category])
+  @@index([downloadCount])
+  @@index([usageCount])
+  @@index([createdAt])
+}
+
+model Sticker {
+  id       BigInt @id @default(autoincrement())
+  packId   BigInt
+  emoji    String @db.VarChar(32) // Ассоциированный эмоджи
+  fileUrl  String @db.VarChar(512)
+  fileName String @db.VarChar(128)
+
+  // Метаданные
+  width    Int
+  height   Int
+  fileSize Int
+  mimeType String @db.VarChar(32)
+
+  // Битовые флаги: animated(1), premium(2)
+  flags Int @default(0)
+
+  usageCount Int @default(0)
+  position   Int @default(0) // Позиция в паке
+
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+
+  pack     StickerPack      @relation(fields: [packId], references: [id], onDelete: Cascade)
+  messages MessageSticker[]
+
+  @@index([packId])
+  @@index([emoji])
+  @@index([usageCount])
+  @@index([position])
+}
+
+model CustomEmoji {
+  id       BigInt  @id @default(autoincrement())
+  chatId   BigInt? // Если null - глобальный эмоджи
+  authorId BigInt
+  name     String  @db.VarChar(32) // :custom_name:
+  fileUrl  String  @db.VarChar(512)
+
+  // Метаданные
+  width    Int
+  height   Int
+  fileSize Int
+  mimeType String @db.VarChar(32)
+
+  // Битовые флаги: animated(1), premium(2), verified(4), disabled(8)
+  flags Int @default(0)
+
+  usageCount Int @default(0)
+
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @db.Timestamptz(3)
+
+  chat     Chat?          @relation("CustomEmojis", fields: [chatId], references: [id], onDelete: Cascade)
+  author   User           @relation("CreatedEmojis", fields: [authorId], references: [id])
+  messages MessageEmoji[]
+
+  @@unique([chatId, name])
+  @@index([chatId])
+  @@index([authorId])
+  @@index([name])
+  @@index([flags])
+  @@index([usageCount])
+}
+
+model GifCategory {
+  id          BigInt  @id @default(autoincrement())
+  name        String  @unique @db.VarChar(64)
+  description String? @db.VarChar(255)
+  iconUrl     String? @db.VarChar(512)
+
+  // Битовые флаги: trending(1), featured(2), nsfw(4)
+  flags    Int @default(0)
+  position Int @default(0)
+
+  gifCount Int @default(0)
+
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+
+  gifs Gif[]
+
+  @@index([name])
+  @@index([flags])
+  @@index([position])
+}
+
+model Gif {
+  id         BigInt @id @default(autoincrement())
+  categoryId BigInt
+  title      String @db.VarChar(128)
+  url        String @db.VarChar(512)
+  previewUrl String @db.VarChar(512)
+
+  // Метаданные
+  width    Int
+  height   Int
+  fileSize Int
+  duration Float? // В секундах
+
+  tags       String? @db.VarChar(255) // Теги через запятую
+  searchText String? @db.VarChar(255) // Для поиска
+
+  // Битовые флаги: trending(1), featured(2), nsfw(4), verified(8)
+  flags Int @default(0)
+
+  usageCount Int @default(0)
+
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+
+  category GifCategory  @relation(fields: [categoryId], references: [id])
+  messages MessageGif[]
+
+  @@index([categoryId])
+  @@index([title])
+  @@index([tags])
+  @@index([flags])
+  @@index([usageCount])
+  @@index([searchText])
+}
+
+// Связи сообщений с медиа контентом
+model MessageSticker {
+  id        BigInt @id @default(autoincrement())
+  messageId BigInt
+  stickerId BigInt
+
+  message Message @relation(fields: [messageId], references: [id], onDelete: Cascade)
+  sticker Sticker @relation(fields: [stickerId], references: [id])
+
+  @@unique([messageId, stickerId])
+  @@index([messageId])
+  @@index([stickerId])
+}
+
+model MessageEmoji {
+  id        BigInt @id @default(autoincrement())
+  messageId BigInt
+  emojiId   BigInt
+
+  message Message     @relation(fields: [messageId], references: [id], onDelete: Cascade)
+  emoji   CustomEmoji @relation(fields: [emojiId], references: [id])
+
+  @@unique([messageId, emojiId])
+  @@index([messageId])
+  @@index([emojiId])
+}
+
+model MessageGif {
+  id        BigInt @id @default(autoincrement())
+  messageId BigInt
+  gifId     BigInt
+
+  message Message @relation(fields: [messageId], references: [id], onDelete: Cascade)
+  gif     Gif     @relation(fields: [gifId], references: [id])
+
+  @@unique([messageId, gifId])
+  @@index([messageId])
+  @@index([gifId])
+}
+
+// Покупки и подписки на стикер-паки
+model StickerPurchase {
+  id       BigInt @id @default(autoincrement())
+  userId   BigInt
+  packId   BigInt
+  price    Int // Цена на момент покупки
+  currency String @default("USD") @db.VarChar(3)
+
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+
+  user User        @relation(fields: [userId], references: [id], onDelete: Cascade)
+  pack StickerPack @relation(fields: [packId], references: [id])
+
+  @@unique([userId, packId])
+  @@index([userId])
+  @@index([packId])
+  @@index([createdAt])
+}
+
+model UserStickerPack {
+  id       BigInt @id @default(autoincrement())
+  userId   BigInt
+  packId   BigInt
+  position Int    @default(0) // Порядок в списке пользователя
+
+  // Битовые флаги: favorite(1), hidden(2)
+  flags Int @default(0)
+
+  addedAt DateTime @default(now()) @db.Timestamptz(3)
+
+  user User        @relation(fields: [userId], references: [id], onDelete: Cascade)
+  pack StickerPack @relation(fields: [packId], references: [id])
+
+  @@unique([userId, packId])
+  @@index([userId])
+  @@index([packId])
+  @@index([position])
+  @@index([flags])
+}
+
+// ===== ПАПКИ ЧАТОВ =====
+
+model ChatFolder {
+  id          BigInt  @id @default(autoincrement())
+  userId      BigInt
+  name        String  @db.VarChar(64)
+  description String? @db.VarChar(255)
+  color       String? @db.Char(7) // HEX цвет
+  iconUrl     String? @db.VarChar(512)
+
+  // Битовые флаги: pinned(1), collapsed(2), archived(4), default(8)
+  flags    Int @default(0)
+  position Int @default(0) // Позиция в списке папок
+
+  // Фильтры для автоматического добавления чатов
+  filters Json? // Условия для автоматической сортировки
+
+  chatCount Int @default(0)
+
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @db.Timestamptz(3)
+
+  user  User             @relation("UserFolders", fields: [userId], references: [id], onDelete: Cascade)
+  chats ChatFolderItem[]
+
+  @@index([userId])
+  @@index([position])
+  @@index([flags])
+  @@index([userId, position])
+}
+
+model ChatFolderItem {
+  id       BigInt @id @default(autoincrement())
+  folderId BigInt
+  chatId   BigInt
+  position Int    @default(0) // Позиция чата в папке
+
+  // Битовые флаги: pinned(1), muted(2), archived(4)
+  flags Int @default(0)
+
+  addedAt DateTime @default(now()) @db.Timestamptz(3)
+
+  folder ChatFolder @relation(fields: [folderId], references: [id], onDelete: Cascade)
+  chat   Chat       @relation("FolderItems", fields: [chatId], references: [id], onDelete: Cascade)
+
+  @@unique([folderId, chatId])
+  @@index([folderId])
+  @@index([chatId])
+  @@index([position])
+  @@index([flags])
 }
 
 // ===== КОНТЕНТ (YOUTUBE + INSTAGRAM) =====
@@ -832,7 +1134,7 @@ model Forum {
   // active(1), private(2), archived(4), moderated(8)
 
   createdAt DateTime @default(now()) @db.Timestamptz(3)
-  updatedAt DateTime @updatedAt @db.Timestamptz(3)
+  updatedAt DateTime @default(now()) @updatedAt @db.Timestamptz(3)
 }
 
 // Продвинутая модерация категорий форума
@@ -840,7 +1142,7 @@ model ForumCategoryModerator {
   id          BigInt    @id @default(autoincrement())
   categoryId  BigInt
   userId      BigInt
-  permissions BigInt    @default(0) // Битовые флаги для разрешений модератора
+  permissions BigInt    @default(0) // Битовые флаги для разрешений модератора (64 бита)
   assignedBy  BigInt
   assignedAt  DateTime  @default(now()) @db.Timestamptz(3)
   expiresAt   DateTime? @db.Timestamptz(3)
@@ -848,7 +1150,7 @@ model ForumCategoryModerator {
 
   category  ForumCategory @relation(fields: [categoryId], references: [id], onDelete: Cascade)
   moderator User          @relation("CategoryModerators", fields: [userId], references: [id], onDelete: Cascade)
-  assigner  User          @relation("AssignedModerators", fields: [assignedBy], references: [id])
+  assigner  User          @relation("AssignedModerators", fields: [assignedBy], references: [id], onDelete: Restrict)
 
   @@unique([categoryId, userId])
   @@index([categoryId])
@@ -867,7 +1169,7 @@ model ForumConfiguration {
   isPublic    Boolean @default(false) // Доступно ли через API
 
   createdAt DateTime @default(now()) @db.Timestamptz(3)
-  updatedAt DateTime @updatedAt @db.Timestamptz(3)
+  updatedAt DateTime @default(now()) @updatedAt @db.Timestamptz(3)
 
   @@index([key])
   @@index([isPublic])
@@ -898,7 +1200,8 @@ model ForumCategory {
   color       String? @db.Char(7)
   icon        String? @db.VarChar(32) // Unicode emoji или icon class
   position    Int     @default(0)
-  parentId    BigInt? // Для вложенных категорий
+  parentId    BigInt? // Для вложенных категорий (макс 3 уровня)
+  level       Int     @default(0) // Уровень вложенности (0-2)
 
   // Битовые флаги: active(1), moderated(2), private(4), archived(8)
   flags Int @default(1)
@@ -909,7 +1212,7 @@ model ForumCategory {
   topicsCount  Int @default(0)
 
   createdAt DateTime @default(now()) @db.Timestamptz(3)
-  updatedAt DateTime @updatedAt @db.Timestamptz(3)
+  updatedAt DateTime @default(now()) @updatedAt @db.Timestamptz(3)
 
   // Связи
   parent      ForumCategory?            @relation("CategoryHierarchy", fields: [parentId], references: [id])
@@ -924,6 +1227,7 @@ model ForumCategory {
   @@index([postsCount])
   @@index([parentId])
   @@index([slug])
+  @@index([level]) // Для ограничения уровней вложенности
   @@index([parentId, position]) // Для иерархического вывода
 }
 
@@ -1006,7 +1310,7 @@ model ForumReply {
   dislikesCount Int @default(0)
 
   createdAt DateTime @default(now()) @db.Timestamptz(3)
-  updatedAt DateTime @updatedAt @db.Timestamptz(3)
+  updatedAt DateTime @default(now()) @updatedAt @db.Timestamptz(3)
 
   // Полнотекстовый поиск
   searchVector String? @db.Text
@@ -1159,7 +1463,7 @@ model Report {
   action     ModerationAction @default(NONE)
 
   createdAt DateTime @default(now()) @db.Timestamptz(3)
-  updatedAt DateTime @updatedAt @db.Timestamptz(3)
+  updatedAt DateTime @default(now()) @updatedAt @db.Timestamptz(3)
 
   reporter User     @relation("ReportedBy", fields: [reporterId], references: [id])
   user     User?    @relation("ReportedUser", fields: [userId], references: [id])
@@ -1187,7 +1491,7 @@ model SecurityAuditLog {
   severity    Int       @default(0) // 0=info, 1=warning, 2=error, 3=critical
   description String    @db.VarChar(255)
   ipAddress   String?   @db.Inet
-  userAgent   String?   @db.VarChar(255)
+  userAgent   String?   @db.VarChar(512) // Увеличено для современных UA
   metadata    Json?
   flags       Int       @default(0) // resolved(1)
   resolvedAt  DateTime? @db.Timestamptz(3)
@@ -1242,17 +1546,24 @@ model UserSettings {
   userId BigInt @unique
 
   // Объединили настройки в JSON для экономии колонок
+  // Структура: { theme: string, language: string, fontSize: number, animations: boolean }
   uiSettings    Json? // theme, language, fontSize, animations
+  // Структура: { enabled: boolean, sound: boolean, vibration: boolean, types: string[] }
   notifications Json? // enabled, sound, vibration, types
+  // Структура: { lastSeen: string, profilePhoto: string, status: string, messaging: string }
   privacy       Json? // lastSeen, profilePhoto, status, messaging
+  // Структура: { biometric: boolean, twoFactor: boolean, sessionTimeout: number }
   security      Json? // biometric, twoFactor, sessionTimeout
+  // Структура: { autoDownload: string, backup: boolean, quality: string }
   dataStorage   Json? // autoDownload, backup, quality settings
+  // Структура: { autoplay: boolean, captions: boolean, recommendations: boolean }
   content       Json? // autoplay, captions, recommendations
+  // Структура: { betaFeatures: string[], labs: boolean }
   experimental  Json? // beta features, labs
   blockedUsers  BigInt[] // Массив ID заблокированных пользователей
 
   createdAt DateTime @default(now()) @db.Timestamptz(3)
-  updatedAt DateTime @updatedAt @db.Timestamptz(3)
+  updatedAt DateTime @default(now()) @updatedAt @db.Timestamptz(3)
 
   user User @relation(fields: [userId], references: [id], onDelete: Cascade)
 
@@ -1265,7 +1576,7 @@ model ChatSettings {
   settings Json? // slowMode, maxMembers, joinApproval, autoDelete, etc.
 
   createdAt DateTime @default(now()) @db.Timestamptz(3)
-  updatedAt DateTime @updatedAt @db.Timestamptz(3)
+  updatedAt DateTime @default(now()) @updatedAt @db.Timestamptz(3)
 
   chat Chat @relation(fields: [chatId], references: [id], onDelete: Cascade)
 
@@ -1304,7 +1615,7 @@ model ForumPostSEO {
   schema       Json? // Структурированные данные Schema.org
 
   createdAt DateTime @default(now()) @db.Timestamptz(3)
-  updatedAt DateTime @updatedAt @db.Timestamptz(3)
+  updatedAt DateTime @default(now()) @updatedAt @db.Timestamptz(3)
 
   post ForumPost @relation("PostSEO", fields: [postId], references: [id], onDelete: Cascade)
 
