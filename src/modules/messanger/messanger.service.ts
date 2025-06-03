@@ -25,6 +25,7 @@ import {
 } from './types';
 import { ChatStatistics, UserChatStatistics } from './types/statistics.type';
 import { MessangerRepository } from './messanger.repository';
+import { callPgFunction } from '../common/db/callPgFunction';
 
 @Injectable()
 export class MessangerService implements IChatService {
@@ -32,6 +33,17 @@ export class MessangerService implements IChatService {
     private readonly prisma: PrismaService,
     private readonly repo: MessangerRepository,
   ) {}
+
+  getUserStatistics(userId: bigint, requesterId: bigint): Promise<UserChatStatistics> {
+    throw new Error('Method not implemented.');
+  }
+
+  getUnreadInfo(userId: bigint): Promise<{
+    totalUnread: number;
+    chatUnreads: Array<{ chatId: bigint; unreadCount: number; lastMessageAt: Date }>;
+  }> {
+    throw new Error('Method not implemented.');
+  }
 
   searchMessages(
     chatId: bigint,
@@ -59,52 +71,67 @@ export class MessangerService implements IChatService {
     inviteLink?: string,
   ): Promise<ChatInfo> {
     try {
-      // Используем SQL функцию create_optimized_chat
-      const result = await this.prisma.$queryRaw<
-        Array<{
-          chat_id: bigint;
-          success: boolean;
-          error_message: string | undefined;
-        }>
-      >`
-        SELECT * FROM create_optimized_chat(
-          ${userId}::bigint,
-          ${type}::text,
-          ${title || undefined}::text,
-          ${description || undefined}::text,
-          ${participantIds}::bigint[],
-          ${isPublic}::boolean,
-          ${inviteLink || undefined}::text
-        )
-      `;
+      const result = await this.prisma.$transaction(async tx => {
+        // 1. Create the chat with only the owner
+        const chat = await tx.chat.create({
+          data: {
+            title,
+            description,
+            type,
+            inviteLink,
+            createdBy: { connect: { id: userId } },
+          },
+        });
 
-      if (!result[0].success) {
-        throw new BadRequestException(result[0].error_message || 'Failed to create chat');
-      }
+        // 2. Add the owner as a ChatParticipant with role OWNER
+        await tx.chatParticipant.create({
+          data: {
+            chatId: chat.id,
+            userId: userId,
+            role: 'OWNER',
+            joinedAt: new Date(),
+          },
+        });
 
-      const chatId = result[0].chat_id;
+        // 3. Add other participants as ChatParticipant with role MEMBER
+        if (participantIds && participantIds.length > 0) {
+          const uniqueIds = Array.from(new Set(participantIds.filter(id => id !== userId)));
+          if (uniqueIds.length > 0) {
+            await tx.chatParticipant.createMany({
+              data: uniqueIds.map(pid => ({
+                chatId: chat.id,
+                userId: pid,
+                role: 'MEMBER',
+                joinedAt: new Date(),
+              })),
+              skipDuplicates: true,
+            });
+          }
+        }
 
-      const chat = await this.prisma.chat.findUnique({
-        where: { id: chatId },
-        include: {
-          createdBy: {
-            select: {
-              id: true,
-              username: true,
-              fullName: true,
-              avatarUrl: true,
-              flags: true,
-              lastSeen: true,
+        // 4. Return the chat info with creator
+        const chatWithCreator = await tx.chat.findUnique({
+          where: { id: chat.id },
+          include: {
+            createdBy: {
+              select: {
+                id: true,
+                username: true,
+                fullName: true,
+                avatarUrl: true,
+                flags: true,
+                lastSeen: true,
+              },
             },
           },
-        },
+        });
+        if (!chatWithCreator) {
+          throw new NotFoundException('Chat not found after creation');
+        }
+        return chatWithCreator;
       });
 
-      if (!chat) {
-        throw new NotFoundException('Chat not found after creation');
-      }
-
-      return this.formatChatInfo(chat);
+      return this.formatChatInfo(result);
     } catch (error) {
       throw new BadRequestException(`Failed to create chat: ${error.message}`);
     }
@@ -750,15 +777,11 @@ export class MessangerService implements IChatService {
       take: limit,
       skip: offset,
     });
-
     const messages = await this.prisma.message.findMany({
       where: {
-        chat: {
-          participants: { some: { userId, leftAt: undefined } },
-          deletedAt: undefined,
-          ...(options?.chatType && { type: options.chatType }),
-        },
+        chat: { participants: { some: { userId, leftAt: undefined } } },
         deletedAt: undefined,
+        ...(options?.chatType && { type: options.chatType }),
         content: { equals: Buffer.from(query) },
       },
       include: { sender: true, attachments: true, reactions: true },
@@ -793,7 +816,6 @@ export class MessangerService implements IChatService {
     });
     return this.formatMessageInfo(updated);
   }
-
   async deleteMessage(messageId: bigint, userId: bigint, forEveryone?: boolean): Promise<boolean> {
     const message = await this.prisma.message.findUnique({ where: { id: messageId } });
     if (!message) throw new Error('Message not found');
@@ -818,19 +840,16 @@ export class MessangerService implements IChatService {
     });
     return {
       ...result,
-      user: result.user
-        ? {
-            id: result.user.id,
-            username: result.user.username,
-            fullName: result.user.fullName || undefined,
-            avatarUrl: result.user.avatarUrl || undefined,
-            flags: result.user.flags || 0,
-            lastSeen: result.user.lastSeen || undefined,
-          }
-        : undefined,
+      user: {
+        id: result.user.id,
+        username: result.user.username,
+        fullName: result.user.fullName || undefined,
+        avatarUrl: result.user.avatarUrl || undefined,
+        flags: result.user.flags || 0,
+        lastSeen: result.user.lastSeen || undefined,
+      },
     };
   }
-
   async removeReaction(messageId: bigint, userId: bigint, reaction: string): Promise<boolean> {
     await this.prisma.messageReaction.deleteMany({ where: { messageId, userId, reaction } });
     return true;
@@ -869,12 +888,10 @@ export class MessangerService implements IChatService {
     await this.prisma.chat.update({ where: { id: chatId }, data: { pinnedMessageId: messageId } });
     return true;
   }
-
   async unpinMessage(chatId: bigint, userId: bigint): Promise<boolean> {
     await this.prisma.chat.update({ where: { id: chatId }, data: { pinnedMessageId: null } });
     return true;
   }
-
   async getPinnedMessages(chatId: bigint, userId: bigint): Promise<MessageInfo[]> {
     const chat = await this.prisma.chat.findUnique({
       where: { id: chatId },
@@ -923,7 +940,7 @@ export class MessangerService implements IChatService {
 
   async unbanParticipant(chatId: bigint, userId: bigint, unbannedById: bigint): Promise<boolean> {
     await this.prisma.chatParticipant.updateMany({
-      where: { chatId, userId },
+      where: { chatId, userId, leftAt: undefined },
       data: { flags: { decrement: 8 }, leftAt: null },
     });
     return true;
@@ -941,19 +958,6 @@ export class MessangerService implements IChatService {
     });
     return true;
   }
-
-  async leaveChat(chatId: bigint, userId: bigint): Promise<boolean> {
-    await this.prisma.chatParticipant.updateMany({
-      where: { chatId, userId, leftAt: undefined },
-      data: { leftAt: new Date() },
-    });
-    await this.prisma.chat.update({
-      where: { id: chatId },
-      data: { memberCount: { decrement: 1 } },
-    });
-    return true;
-  }
-
   async joinChatByInvite(inviteCode: string, userId: bigint): Promise<ChatInfo> {
     const chat = await this.prisma.chat.findFirst({
       where: { inviteLink: inviteCode, deletedAt: undefined },
@@ -962,13 +966,21 @@ export class MessangerService implements IChatService {
     await this.prisma.chatParticipant.create({
       data: { chatId: chat.id, userId, role: 'MEMBER', joinedAt: new Date() },
     });
-    await this.prisma.chat.update({
-      where: { id: chat.id },
-      data: { memberCount: { increment: 1 } },
-    });
     return this.formatChatInfo(chat);
   }
 
+  async leaveChat(chatId: bigint, userId: bigint): Promise<boolean> {
+    await this.prisma.chatParticipant.updateMany({
+      where: { chatId, userId, leftAt: undefined },
+      data: { leftAt: new Date() },
+    });
+    const chat = await this.prisma.chat.findUnique({ where: { id: chatId } });
+    await this.prisma.chat.update({
+      where: { id: chatId },
+      data: { memberCount: { decrement: 1 } },
+    });
+    return true;
+  }
   async generateInviteLink(chatId: bigint, userId: bigint): Promise<string> {
     const invite = Math.random().toString(36).substring(2, 10);
     await this.prisma.chat.update({ where: { id: chatId }, data: { inviteLink: invite } });
@@ -990,6 +1002,7 @@ export class MessangerService implements IChatService {
         fileHash: '',
         fileKey: file.filename,
         fileIV: '',
+
         fileSize: file.size,
         fileType: file.mimetype,
         url,
@@ -999,7 +1012,6 @@ export class MessangerService implements IChatService {
     });
     return { ...attachment, thumbnail: undefined, description: undefined };
   }
-
   async downloadAttachment(attachmentId: bigint, userId: bigint): Promise<Buffer> {
     const attachment = await this.prisma.messageAttachment.findUnique({
       where: { id: attachmentId },
@@ -1030,7 +1042,6 @@ export class MessangerService implements IChatService {
     });
     return { ...thread, title: thread.title ?? undefined };
   }
-
   async getThreadMessages(
     threadId: bigint,
     userId: bigint,
@@ -1053,7 +1064,6 @@ export class MessangerService implements IChatService {
       nextCursor: messages.length === limit ? String(messages[messages.length - 1].id) : undefined,
     };
   }
-
   async getChatSettings(chatId: bigint, userId: bigint): Promise<ChatSettings> {
     const settings = await this.prisma.chatSettings.findUnique({ where: { chatId } });
     if (!settings) throw new Error('Settings not found');
@@ -1071,52 +1081,13 @@ export class MessangerService implements IChatService {
     });
     return { ...updated, settings: (updated.settings ?? {}) as Record<string, any> };
   }
-
-  async getUnreadInfo(userId: bigint): Promise<{
-    totalUnread: number;
-    chatUnreads: Array<{ chatId: bigint; unreadCount: number; lastMessageAt: Date }>;
-  }> {
-    const chatUnreads = await this.repo.getUnreadInfoRaw(userId);
-    const totalUnread = chatUnreads.reduce((acc, c) => acc + Number(c.unread_count), 0);
-    return {
-      totalUnread,
-      chatUnreads: chatUnreads.map(c => ({
-        chatId: c.chat_id,
-        unreadCount: Number(c.unread_count),
-        lastMessageAt: c.last_message_at,
-      })),
-    };
-  }
-
   async getUnreadCount(userId: bigint): Promise<number> {
     const info = await this.getUnreadInfo(userId);
     return info.totalUnread;
   }
 
   async getUserChatStatistics(userId: bigint): Promise<UserChatStatistics> {
-    const totalChats = await this.prisma.chatParticipant.count({
-      where: { userId, leftAt: undefined },
-    });
-    const messagesSent = await this.prisma.message.count({
-      where: { senderId: userId, deletedAt: undefined },
-    });
-    return {
-      userId,
-      totalChats,
-      activeChats: totalChats,
-      archivedChats: 0,
-      messagesSent,
-      messagesReceived: 0,
-      mediaShared: 0,
-      averageResponseTime: 0,
-      mostActiveChat: { chatId: BigInt(0), messageCount: 0 },
-      dailyActivity: [],
-      lastActivity: new Date(),
-    };
-  }
-
-  async getUserStatistics(userId: bigint, requesterId: bigint): Promise<UserChatStatistics> {
-    return this.getUserChatStatistics(userId);
+    throw new Error('Method not implemented.');
   }
 
   // Исправление: корректная типизация UserInfo для reactions
@@ -1170,7 +1141,6 @@ export class MessangerService implements IChatService {
     }
     return { affected, errors };
   }
-
   async setSlowMode(
     chatId: bigint,
     moderatorId: bigint,
@@ -1180,7 +1150,7 @@ export class MessangerService implements IChatService {
       where: { chatId },
       update: { settings: { slowMode: intervalSeconds }, updatedAt: new Date() },
       create: {
-        chatId,
+        chatId: chatId,
         settings: { slowMode: intervalSeconds },
         createdAt: new Date(),
         updatedAt: new Date(),

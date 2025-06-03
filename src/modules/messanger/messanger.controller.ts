@@ -11,6 +11,10 @@ import {
   ValidationPipe,
   HttpStatus,
   HttpCode,
+  UseInterceptors,
+  UseGuards,
+  Request,
+  Logger,
 } from '@nestjs/common';
 import { MessangerService } from './messanger.service';
 import {
@@ -22,194 +26,632 @@ import {
   UpdateParticipantRoleDto,
 } from './dto/chat.dto';
 import { ChatType, MessageType, ChatRole } from './types';
+import {
+  ApiTags,
+  ApiOperation,
+  ApiResponse,
+  ApiParam,
+  ApiQuery,
+  ApiBearerAuth,
+} from '@nestjs/swagger';
+import { ResponseInterceptor } from '../common/interceptors/response.interceptor';
+import { GlobalAuthGuard } from '../common/guards/global-auth.guard';
+import { UserRequest } from '../auth/types';
 
+@UseInterceptors(ResponseInterceptor)
+@ApiBearerAuth()
+@ApiTags('Messenger')
 @Controller('messenger')
 export class MessangerController {
+  private readonly logger = new Logger(MessangerController.name);
+
   constructor(private readonly messengerService: MessangerService) {}
 
-  private getUserIdFromRequest(): bigint {
-    return BigInt(1);
+  private getUserIdFromRequest(request?: any): bigint {
+    return request?.user?.id ? BigInt(request.user.id) : BigInt(2);
   }
 
   @Post('chats')
-  async createChat(@Body(ValidationPipe) createChatDto: CreateChatDto) {
-    const userId = this.getUserIdFromRequest();
+  @ApiOperation({
+    summary: 'Create a new chat',
+    description: 'Create a new chat with specified type and optional participants',
+  })
+  @ApiResponse({
+    status: 201,
+    description: 'Chat created successfully',
+    schema: {
+      type: 'object',
+      properties: {
+        success: { type: 'boolean', example: true },
+        data: {
+          type: 'object',
+          properties: {
+            id: { type: 'string', example: '123' },
+            type: { type: 'string', enum: ['DIRECT', 'GROUP', 'CHANNEL'] },
+            title: { type: 'string', example: 'Team Discussion' },
+            memberCount: { type: 'number', example: 5 },
+          },
+        },
+      },
+    },
+  })
+  @ApiResponse({ status: 400, description: 'Invalid chat data' })
+  @ApiResponse({ status: 403, description: 'Insufficient permissions' })
+  async createChat(
+    @Body(ValidationPipe) createChatDto: CreateChatDto,
+    @Request() req: UserRequest,
+  ) {
+    try {
+      const userId = this.getUserIdFromRequest(req);
+      this.logger.log(`Creating chat for user ${userId}, type: ${createChatDto.type}`);
 
-    return await this.messengerService.createChat(
-      userId,
-      createChatDto.type,
-      createChatDto.title,
-      createChatDto.description,
-      createChatDto.participantIds,
-      createChatDto.isPublic,
-      createChatDto.inviteLink,
-    );
+      return await this.messengerService.createChat(
+        userId,
+        createChatDto.type,
+        createChatDto.title,
+        createChatDto.description,
+        createChatDto.participantIds,
+        createChatDto.isPublic,
+        createChatDto.inviteLink,
+      );
+    } catch (error) {
+      this.logger.error(
+        `Error creating chat for user ${this.getUserIdFromRequest(req)}`,
+        error.stack,
+      );
+      throw error;
+    }
   }
-
   @Get('chats/:chatId')
-  async getChatInfo(@Param('chatId', ParseIntPipe) chatId: number) {
-    const mockUserId = BigInt(1);
-    return await this.messengerService.getChatInfo(BigInt(chatId), mockUserId);
-  }
+  @ApiOperation({
+    summary: 'Get chat information',
+    description: 'Retrieve detailed information about a specific chat',
+  })
+  @ApiParam({ name: 'chatId', description: 'Chat ID', type: 'number' })
+  @ApiResponse({
+    status: 200,
+    description: 'Chat information retrieved successfully',
+    schema: {
+      type: 'object',
+      properties: {
+        success: { type: 'boolean', example: true },
+        data: {
+          type: 'object',
+          properties: {
+            id: { type: 'string' },
+            type: { type: 'string', enum: ['DIRECT', 'GROUP', 'CHANNEL'] },
+            title: { type: 'string' },
+            description: { type: 'string' },
+            memberCount: { type: 'number' },
+            createdAt: { type: 'string', format: 'date-time' },
+          },
+        },
+      },
+    },
+  })
+  @ApiResponse({ status: 404, description: 'Chat not found' })
+  @ApiResponse({ status: 403, description: 'No access to this chat' })
+  async getChatInfo(@Param('chatId', ParseIntPipe) chatId: number, @Request() req: UserRequest) {
+    try {
+      const userId = this.getUserIdFromRequest(req);
+      this.logger.log(`Getting chat info for chat ${chatId}, user ${userId}`);
 
+      return await this.messengerService.getChatInfo(BigInt(chatId), userId);
+    } catch (error) {
+      this.logger.error(`Error getting chat info for chat ${chatId}`, error.stack);
+      throw error;
+    }
+  }
   @Put('chats/:chatId')
+  @ApiOperation({
+    summary: 'Update chat',
+    description: 'Update chat title, description or avatar',
+  })
+  @ApiParam({ name: 'chatId', description: 'Chat ID', type: 'number' })
+  @ApiResponse({ status: 200, description: 'Chat updated successfully' })
+  @ApiResponse({ status: 403, description: 'No permission to edit this chat' })
+  @ApiResponse({ status: 404, description: 'Chat not found' })
   async updateChat(
     @Param('chatId', ParseIntPipe) chatId: number,
     @Body(ValidationPipe) updateChatDto: UpdateChatDto,
+    @Request() req: UserRequest,
   ) {
-    const mockUserId = BigInt(1);
-    return await this.messengerService.updateChat(BigInt(chatId), mockUserId, updateChatDto);
-  }
+    try {
+      const userId = this.getUserIdFromRequest(req);
+      this.logger.log(`Updating chat ${chatId} by user ${userId}`);
 
+      return await this.messengerService.updateChat(BigInt(chatId), userId, updateChatDto);
+    } catch (error) {
+      this.logger.error(`Error updating chat ${chatId}`, error.stack);
+      throw error;
+    }
+  }
   @Delete('chats/:chatId')
   @HttpCode(HttpStatus.OK)
-  async deleteChat(@Param('chatId', ParseIntPipe) chatId: number) {
-    const mockUserId = BigInt(1);
-    return await this.messengerService.deleteChat(BigInt(chatId), mockUserId);
-  }
+  @ApiOperation({
+    summary: 'Delete chat',
+    description: 'Delete a chat (only chat owner can delete)',
+  })
+  @ApiParam({ name: 'chatId', description: 'Chat ID', type: 'number' })
+  @ApiResponse({ status: 200, description: 'Chat deleted successfully' })
+  @ApiResponse({ status: 403, description: 'Only chat owner can delete the chat' })
+  @ApiResponse({ status: 404, description: 'Chat not found' })
+  async deleteChat(@Param('chatId', ParseIntPipe) chatId: number, @Request() req: UserRequest) {
+    try {
+      const userId = this.getUserIdFromRequest(req);
+      this.logger.log(`Deleting chat ${chatId} by user ${userId}`);
 
+      return await this.messengerService.deleteChat(BigInt(chatId), userId);
+    } catch (error) {
+      this.logger.error(`Error deleting chat ${chatId}`, error.stack);
+      throw error;
+    }
+  }
   @Get('chats')
+  @ApiOperation({
+    summary: 'Get user chats',
+    description: 'Retrieve all chats for the authenticated user with optional filters',
+  })
+  @ApiQuery({ name: 'type', enum: ChatType, required: false, description: 'Filter by chat type' })
+  @ApiQuery({
+    name: 'limit',
+    type: 'number',
+    required: false,
+    description: 'Limit number of results (default: 50)',
+  })
+  @ApiQuery({
+    name: 'offset',
+    type: 'number',
+    required: false,
+    description: 'Offset for pagination (default: 0)',
+  })
+  @ApiResponse({
+    status: 200,
+    description: 'User chats retrieved successfully',
+    schema: {
+      type: 'object',
+      properties: {
+        success: { type: 'boolean', example: true },
+        data: {
+          type: 'array',
+          items: {
+            type: 'object',
+            properties: {
+              id: { type: 'string' },
+              type: { type: 'string', enum: ['DIRECT', 'GROUP', 'CHANNEL'] },
+              title: { type: 'string' },
+              memberCount: { type: 'number' },
+              lastMessageAt: { type: 'string', format: 'date-time' },
+            },
+          },
+        },
+      },
+    },
+  })
   async getUserChats(
     @Query('type') type?: ChatType,
     @Query('limit', ParseIntPipe) limit = 50,
     @Query('offset', ParseIntPipe) offset = 0,
+    @Request() req?: UserRequest,
   ) {
-    const mockUserId = BigInt(1);
-    return await this.messengerService.getUserChats(mockUserId, {
-      chatType: type,
-      limit,
-      offset,
-    });
-  }
+    try {
+      const userId = this.getUserIdFromRequest(req);
+      this.logger.log(
+        `Getting chats for user ${userId}, type: ${type || 'all'}, limit: ${limit}, offset: ${offset}`,
+      );
 
+      return await this.messengerService.getUserChats(userId, {
+        chatType: type,
+        limit,
+        offset,
+      });
+    } catch (error) {
+      this.logger.error(
+        `Error getting chats for user ${this.getUserIdFromRequest(req)}`,
+        error.stack,
+      );
+      throw error;
+    }
+  }
   // ===============================================
   // УПРАВЛЕНИЕ УЧАСТНИКАМИ
   // ===============================================
 
   @Post('chats/:chatId/participants')
+  @ApiOperation({
+    summary: 'Add participant to chat',
+    description: 'Add a new participant to an existing chat',
+  })
+  @ApiParam({ name: 'chatId', description: 'Chat ID', type: 'number' })
+  @ApiResponse({ status: 201, description: 'Participant added successfully' })
+  @ApiResponse({ status: 400, description: 'User is already a participant' })
+  @ApiResponse({ status: 403, description: 'No permission to add members' })
   async addParticipant(
     @Param('chatId', ParseIntPipe) chatId: number,
     @Body(ValidationPipe) addParticipantDto: AddParticipantDto,
+    @Request() req: UserRequest,
   ) {
-    const mockUserId = BigInt(1);
-    return await this.messengerService.addParticipant(
-      BigInt(chatId),
-      mockUserId,
-      addParticipantDto.userId,
-      addParticipantDto.role,
-    );
-  }
+    try {
+      const userId = this.getUserIdFromRequest(req);
+      this.logger.log(
+        `Adding participant ${addParticipantDto.userId} to chat ${chatId} by user ${userId}`,
+      );
 
+      return await this.messengerService.addParticipant(
+        BigInt(chatId),
+        userId,
+        addParticipantDto.userId,
+        addParticipantDto.role,
+      );
+    } catch (error) {
+      this.logger.error(`Error adding participant to chat ${chatId}`, error.stack);
+      throw error;
+    }
+  }
   @Delete('chats/:chatId/participants/:userId')
   @HttpCode(HttpStatus.OK)
+  @ApiOperation({
+    summary: 'Remove participant from chat',
+    description: 'Remove a participant from the chat',
+  })
+  @ApiParam({ name: 'chatId', description: 'Chat ID', type: 'number' })
+  @ApiParam({ name: 'userId', description: 'User ID to remove', type: 'number' })
+  @ApiResponse({ status: 200, description: 'Participant removed successfully' })
+  @ApiResponse({ status: 403, description: 'No permission to remove members' })
+  @ApiResponse({ status: 404, description: 'Participant not found' })
   async removeParticipant(
     @Param('chatId', ParseIntPipe) chatId: number,
     @Param('userId', ParseIntPipe) userId: number,
+    @Request() req: UserRequest,
   ) {
-    const mockUserId = BigInt(1);
-    return await this.messengerService.removeParticipant(
-      BigInt(chatId),
-      mockUserId,
-      BigInt(userId),
-    );
-  }
+    try {
+      const requestUserId = this.getUserIdFromRequest(req);
+      this.logger.log(
+        `Removing participant ${userId} from chat ${chatId} by user ${requestUserId}`,
+      );
 
+      return await this.messengerService.removeParticipant(
+        BigInt(chatId),
+        requestUserId,
+        BigInt(userId),
+      );
+    } catch (error) {
+      this.logger.error(`Error removing participant ${userId} from chat ${chatId}`, error.stack);
+      throw error;
+    }
+  }
   @Get('chats/:chatId/participants')
+  @ApiOperation({
+    summary: 'Get chat participants',
+    description: 'Retrieve all participants of a specific chat',
+  })
+  @ApiParam({ name: 'chatId', description: 'Chat ID', type: 'number' })
+  @ApiQuery({
+    name: 'limit',
+    type: 'number',
+    required: false,
+    description: 'Limit number of results (default: 100)',
+  })
+  @ApiQuery({
+    name: 'offset',
+    type: 'number',
+    required: false,
+    description: 'Offset for pagination (default: 0)',
+  })
+  @ApiResponse({
+    status: 200,
+    description: 'Chat participants retrieved successfully',
+    schema: {
+      type: 'object',
+      properties: {
+        success: { type: 'boolean', example: true },
+        data: {
+          type: 'array',
+          items: {
+            type: 'object',
+            properties: {
+              id: { type: 'string' },
+              userId: { type: 'string' },
+              role: { type: 'string', enum: ['OWNER', 'ADMIN', 'MODERATOR', 'MEMBER'] },
+              joinedAt: { type: 'string', format: 'date-time' },
+              user: {
+                type: 'object',
+                properties: {
+                  id: { type: 'string' },
+                  username: { type: 'string' },
+                  fullName: { type: 'string' },
+                  avatarUrl: { type: 'string' },
+                },
+              },
+            },
+          },
+        },
+      },
+    },
+  })
+  @ApiResponse({ status: 403, description: 'No access to this chat' })
   async getChatParticipants(
     @Param('chatId', ParseIntPipe) chatId: number,
     @Query('limit', ParseIntPipe) limit = 100,
     @Query('offset', ParseIntPipe) offset = 0,
+    @Request() req: UserRequest,
   ) {
-    const mockUserId = BigInt(1);
-    return await this.messengerService.getChatParticipants(BigInt(chatId), mockUserId, {
-      limit,
-      offset,
-    });
-  }
+    try {
+      const userId = this.getUserIdFromRequest(req);
+      this.logger.log(
+        `Getting participants for chat ${chatId}, user ${userId}, limit: ${limit}, offset: ${offset}`,
+      );
 
+      return await this.messengerService.getChatParticipants(BigInt(chatId), userId, {
+        limit,
+        offset,
+      });
+    } catch (error) {
+      this.logger.error(`Error getting participants for chat ${chatId}`, error.stack);
+      throw error;
+    }
+  }
   @Put('chats/:chatId/participants/:userId/role')
+  @ApiOperation({
+    summary: 'Update participant role',
+    description: 'Update the role of a participant in the chat',
+  })
+  @ApiParam({ name: 'chatId', description: 'Chat ID', type: 'number' })
+  @ApiParam({ name: 'userId', description: 'User ID whose role to update', type: 'number' })
+  @ApiResponse({ status: 200, description: 'Participant role updated successfully' })
+  @ApiResponse({ status: 403, description: 'No permission to change roles' })
+  @ApiResponse({ status: 404, description: 'Participant not found' })
   async updateParticipantRole(
     @Param('chatId', ParseIntPipe) chatId: number,
     @Param('userId', ParseIntPipe) userId: number,
     @Body(ValidationPipe) updateRoleDto: UpdateParticipantRoleDto,
+    @Request() req: UserRequest,
   ) {
-    const mockUserId = BigInt(1);
-    return await this.messengerService.updateParticipantRole(
-      BigInt(chatId),
-      mockUserId,
-      updateRoleDto.role,
-      BigInt(userId),
-    );
-  }
+    try {
+      const requestUserId = this.getUserIdFromRequest(req);
+      this.logger.log(
+        `Updating role for user ${userId} in chat ${chatId} to ${updateRoleDto.role} by user ${requestUserId}`,
+      );
 
+      return await this.messengerService.updateParticipantRole(
+        BigInt(chatId),
+        requestUserId,
+        updateRoleDto.role,
+        BigInt(userId),
+      );
+    } catch (error) {
+      this.logger.error(`Error updating role for user ${userId} in chat ${chatId}`, error.stack);
+      throw error;
+    }
+  }
   // ===============================================
   // СООБЩЕНИЯ
   // ===============================================
 
   @Post('chats/:chatId/messages')
+  @ApiOperation({
+    summary: 'Send message',
+    description: 'Send a new message to the chat',
+  })
+  @ApiParam({ name: 'chatId', description: 'Chat ID', type: 'number' })
+  @ApiResponse({
+    status: 201,
+    description: 'Message sent successfully',
+    schema: {
+      type: 'object',
+      properties: {
+        success: { type: 'boolean', example: true },
+        data: {
+          type: 'object',
+          properties: {
+            id: { type: 'string' },
+            chatId: { type: 'string' },
+            senderId: { type: 'string' },
+            content: { type: 'string' },
+            messageType: { type: 'string', enum: ['TEXT', 'IMAGE', 'VIDEO', 'AUDIO', 'FILE'] },
+            createdAt: { type: 'string', format: 'date-time' },
+            sender: {
+              type: 'object',
+              properties: {
+                id: { type: 'string' },
+                username: { type: 'string' },
+                fullName: { type: 'string' },
+              },
+            },
+          },
+        },
+      },
+    },
+  })
+  @ApiResponse({ status: 400, description: 'Invalid message data' })
+  @ApiResponse({ status: 403, description: 'No access to this chat' })
   async sendMessage(
     @Param('chatId', ParseIntPipe) chatId: number,
     @Body(ValidationPipe) sendMessageDto: SendMessageDto,
+    @Request() req: UserRequest,
   ) {
-    const mockUserId = BigInt(1);
+    try {
+      const userId = this.getUserIdFromRequest(req);
+      this.logger.log(
+        `Sending message to chat ${chatId} by user ${userId}, type: ${sendMessageDto.messageType || 'TEXT'}`,
+      );
 
-    // Конвертируем content в строку если это Buffer
-    const content =
-      typeof sendMessageDto.content === 'string'
-        ? sendMessageDto.content
-        : sendMessageDto.content.toString();
+      // Конвертируем content в строку если это Buffer
+      const content =
+        typeof sendMessageDto.content === 'string'
+          ? sendMessageDto.content
+          : sendMessageDto.content.toString();
 
-    return await this.messengerService.sendMessage(
-      BigInt(chatId),
-      mockUserId,
-      content,
-      sendMessageDto.messageType || MessageType.TEXT,
-      {
-        attachments: [], // attachments - пока пустой массив
-        replyToId: sendMessageDto.replyToId,
-        threadId: sendMessageDto.threadId,
-      },
-    );
+      return await this.messengerService.sendMessage(
+        BigInt(chatId),
+        userId,
+        content,
+        sendMessageDto.messageType || MessageType.TEXT,
+        {
+          attachments: [], // attachments - пока пустой массив
+          replyToId: sendMessageDto.replyToId,
+          threadId: sendMessageDto.threadId,
+        },
+      );
+    } catch (error) {
+      this.logger.error(`Error sending message to chat ${chatId}`, error.stack);
+      throw error;
+    }
   }
-
   @Get('chats/:chatId/messages')
+  @ApiOperation({
+    summary: 'Get chat messages',
+    description: 'Retrieve messages from a chat with pagination',
+  })
+  @ApiParam({ name: 'chatId', description: 'Chat ID', type: 'number' })
+  @ApiQuery({
+    name: 'limit',
+    type: 'number',
+    required: false,
+    description: 'Limit number of results (default: 50)',
+  })
+  @ApiQuery({
+    name: 'beforeId',
+    type: 'number',
+    required: false,
+    description: 'Get messages before this message ID',
+  })
+  @ApiQuery({
+    name: 'afterId',
+    type: 'number',
+    required: false,
+    description: 'Get messages after this message ID',
+  })
+  @ApiResponse({
+    status: 200,
+    description: 'Messages retrieved successfully',
+    schema: {
+      type: 'object',
+      properties: {
+        success: { type: 'boolean', example: true },
+        data: {
+          type: 'object',
+          properties: {
+            messages: {
+              type: 'array',
+              items: {
+                type: 'object',
+                properties: {
+                  id: { type: 'string' },
+                  content: { type: 'string' },
+                  messageType: { type: 'string' },
+                  createdAt: { type: 'string', format: 'date-time' },
+                  sender: { type: 'object' },
+                },
+              },
+            },
+            hasMore: { type: 'boolean' },
+            nextCursor: { type: 'string', nullable: true },
+          },
+        },
+      },
+    },
+  })
+  @ApiResponse({ status: 403, description: 'No access to this chat' })
   async getMessages(
     @Param('chatId', ParseIntPipe) chatId: number,
     @Query('limit', ParseIntPipe) limit = 50,
     @Query('beforeId', ParseIntPipe) beforeId?: number,
     @Query('afterId', ParseIntPipe) afterId?: number,
+    @Request() req?: UserRequest,
   ) {
-    const mockUserId = BigInt(1);
-    return await this.messengerService.getMessages(BigInt(chatId), mockUserId, {
-      limit,
-      beforeMessageId: beforeId ? BigInt(beforeId) : undefined,
-      afterMessageId: afterId ? BigInt(afterId) : undefined,
-    });
-  }
+    try {
+      const userId = this.getUserIdFromRequest(req);
+      this.logger.log(`Getting messages for chat ${chatId}, user ${userId}, limit: ${limit}`);
 
+      return await this.messengerService.getMessages(BigInt(chatId), userId, {
+        limit,
+        beforeMessageId: beforeId ? BigInt(beforeId) : undefined,
+        afterMessageId: afterId ? BigInt(afterId) : undefined,
+      });
+    } catch (error) {
+      this.logger.error(`Error getting messages for chat ${chatId}`, error.stack);
+      throw error;
+    }
+  }
   @Put('messages/:messageId')
+  @ApiOperation({
+    summary: 'Edit message',
+    description: 'Edit an existing message content',
+  })
+  @ApiParam({ name: 'messageId', description: 'Message ID', type: 'number' })
+  @ApiResponse({
+    status: 200,
+    description: 'Message edited successfully',
+    schema: {
+      type: 'object',
+      properties: {
+        success: { type: 'boolean', example: true },
+        data: {
+          type: 'object',
+          properties: {
+            id: { type: 'string' },
+            content: { type: 'string' },
+            editedAt: { type: 'string', format: 'date-time' },
+          },
+        },
+      },
+    },
+  })
+  @ApiResponse({ status: 403, description: 'No permission to edit this message' })
+  @ApiResponse({ status: 404, description: 'Message not found' })
   async editMessage(
     @Param('messageId', ParseIntPipe) messageId: number,
     @Body(ValidationPipe) editMessageDto: EditMessageDto,
+    @Request() req: UserRequest,
   ) {
-    const mockUserId = BigInt(1);
+    try {
+      const userId = this.getUserIdFromRequest(req);
+      this.logger.log(`Editing message ${messageId} by user ${userId}`);
 
-    // Конвертируем content в строку если это Buffer
-    const content =
-      typeof editMessageDto.content === 'string'
-        ? editMessageDto.content
-        : editMessageDto.content.toString();
+      // Конвертируем content в строку если это Buffer
+      const content =
+        typeof editMessageDto.content === 'string'
+          ? editMessageDto.content
+          : editMessageDto.content.toString();
 
-    return await this.messengerService.editMessage(BigInt(messageId), mockUserId, content);
+      return await this.messengerService.editMessage(BigInt(messageId), userId, content);
+    } catch (error) {
+      this.logger.error(`Error editing message ${messageId}`, error.stack);
+      throw error;
+    }
   }
-
   @Delete('messages/:messageId')
   @HttpCode(HttpStatus.OK)
+  @ApiOperation({
+    summary: 'Delete message',
+    description: 'Delete a message from the chat',
+  })
+  @ApiParam({ name: 'messageId', description: 'Message ID', type: 'number' })
+  @ApiQuery({
+    name: 'forEveryone',
+    type: 'boolean',
+    required: false,
+    description: 'Delete for everyone (default: false)',
+  })
+  @ApiResponse({ status: 200, description: 'Message deleted successfully' })
+  @ApiResponse({ status: 403, description: 'No permission to delete this message' })
+  @ApiResponse({ status: 404, description: 'Message not found' })
   async deleteMessage(
     @Param('messageId', ParseIntPipe) messageId: number,
     @Query('forEveryone') forEveryone: boolean = false,
+    @Request() req: UserRequest,
   ) {
-    const mockUserId = BigInt(1);
-    return await this.messengerService.deleteMessage(BigInt(messageId), mockUserId, forEveryone);
+    try {
+      const userId = this.getUserIdFromRequest(req);
+      this.logger.log(
+        `Deleting message ${messageId} by user ${userId}, forEveryone: ${forEveryone}`,
+      );
+
+      return await this.messengerService.deleteMessage(BigInt(messageId), userId, forEveryone);
+    } catch (error) {
+      this.logger.error(`Error deleting message ${messageId}`, error.stack);
+      throw error;
+    }
   }
 }

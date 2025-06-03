@@ -51,4 +51,10 @@ export class SupabaseAuthService {
     if (error) throw new UnauthorizedException(error.message);
     return data.user;
   }
+
+  async refreshSession(refresh_token: string) {
+    const { data, error } = await this.client.auth.refreshSession({ refresh_token });
+    if (error) throw new UnauthorizedException(error.message);
+    return data.session;
+  }
 }

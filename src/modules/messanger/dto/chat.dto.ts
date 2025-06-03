@@ -12,7 +12,7 @@ import {
   IsIn,
 } from 'class-validator';
 import { Transform, Type } from 'class-transformer';
-import { ChatType, MessageType, ChatRole } from '../types/chat.types';
+import { ChatType, MessageType, ChatRole } from '../types';
 
 export class CreateChatDto {
   @IsEnum(ChatType)

@@ -9,7 +9,18 @@ export class AuthService {
     private readonly prisma: PrismaService,
   ) {}
 
-  refresh(access_token: string) {}
+  async refresh(access_token: string) {
+    const session = await this.supabaseAuth.refreshSession(access_token);
+    if (!session) throw new Error('Failed to refresh session');
+
+    const user = await this.prisma.user.findUnique({
+      where: { email: session.user.email },
+    });
+
+    if (!user) throw new Error('User not found in database');
+
+    return { user, session };
+  }
 
   async register(email: string, password: string, username: string) {
     const { user, session } = await this.supabaseAuth.signUp(email, password);
@@ -19,9 +30,6 @@ export class AuthService {
       data: {
         email,
         username,
-        oauth_id: user.id, // Supabase user ID
-        oauth_provider: 'supabase',
-        role_id: 1, // Default role ID
       },
     });
 
@@ -44,7 +52,10 @@ export class AuthService {
   }
 
   async logout(jwt: string) {
-    return this.supabaseAuth.signOut(jwt);
+    const result = await this.supabaseAuth.signOut(jwt);
+    if (!result) throw new Error('Failed to logout');
+
+    return { message: 'Logout successful' };
   }
 
   async getUserProfile(jwt: string) {
@@ -55,9 +66,7 @@ export class AuthService {
       where: { email: supabaseUser.email },
     });
 
-    if (!dbUser) {
-      throw new Error('User not found in database');
-    }
+    if (!dbUser) throw new Error('User not found in database');
 
     return { ...dbUser, supabaseUser };
   }

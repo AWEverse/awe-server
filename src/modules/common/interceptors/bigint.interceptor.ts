@@ -2,31 +2,25 @@ import { CallHandler, ExecutionContext, Injectable, NestInterceptor } from '@nes
 import { Observable } from 'rxjs';
 import { map } from 'rxjs/operators';
 
-function replacer(key: string, value: any) {
-  if (typeof value === 'bigint') {
-    return value.toString();
+function convertBigIntToString(input: any): any {
+  if (typeof input === 'bigint') {
+    return input.toString();
   }
-  return value;
-}
 
-function convertBigIntToString(obj: any): any {
-  if (Array.isArray(obj)) {
-    return obj.map(convertBigIntToString);
-  } else if (obj && typeof obj === 'object') {
-    const newObj: any = {};
-    for (const key of Object.keys(obj)) {
-      const value = obj[key];
-      if (typeof value === 'bigint') {
-        newObj[key] = value.toString();
-      } else if (typeof value === 'object') {
-        newObj[key] = convertBigIntToString(value);
-      } else {
-        newObj[key] = value;
-      }
-    }
-    return newObj;
+  if (Array.isArray(input)) {
+    return input.map(convertBigIntToString);
   }
-  return obj;
+
+  if (input && typeof input === 'object') {
+    const result: Record<string, any> = {};
+
+    for (const [key, value] of Object.entries(input)) {
+      result[key] = convertBigIntToString(value);
+    }
+    return result;
+  }
+
+  return input;
 }
 
 @Injectable()

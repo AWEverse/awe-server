@@ -1,36 +1,88 @@
-import { Controller, Post, Body, Get, UseGuards, Request } from '@nestjs/common';
+import {
+  Controller,
+  Post,
+  Body,
+  Get,
+  UseGuards,
+  Request,
+  Logger,
+  UseInterceptors,
+} from '@nestjs/common';
 import { AuthService } from './auth.service';
 import { SupabaseAuthGuard } from './guards/supabase-auth.guard';
+import { RegisterDto, LoginDto } from './dto';
+import { UserRequest } from './types';
+import { ApiTags, ApiOperation, ApiResponse } from '@nestjs/swagger';
+import { ResponseInterceptor } from '../common/interceptors/response.interceptor';
 
+@UseInterceptors(ResponseInterceptor)
+@ApiTags('Authentication')
 @Controller('auth')
 export class AuthController {
+  private readonly logger = new Logger(AuthController.name);
+
   constructor(private readonly authService: AuthService) {}
 
   @Post('register')
-  async register(@Body() body: { email: string; password: string; username: string }) {
-    return this.authService.register(body.email, body.password, body.username);
+  @ApiOperation({ summary: 'Register a new user' })
+  @ApiResponse({ status: 201, description: 'User registered successfully' })
+  async register(@Body() body: RegisterDto) {
+    try {
+      return this.authService.register(body.email, body.password, body.username);
+    } catch (error) {
+      this.logger.error('Error during registration', error.stack);
+      throw error;
+    }
   }
 
   @Post('login')
-  async login(@Body() body: { email: string; password: string }) {
-    return this.authService.login(body.email, body.password);
+  @ApiOperation({ summary: 'Login user' })
+  @ApiResponse({ status: 200, description: 'User logged in successfully' })
+  async login(@Body() body: LoginDto) {
+    try {
+      return this.authService.login(body.email, body.password);
+    } catch (error) {
+      this.logger.error('Error during login', error.stack);
+      throw error;
+    }
   }
 
   @Post('refresh')
   @UseGuards(SupabaseAuthGuard)
-  async refresh(@Request() req: any) {
-    return this.authService.refresh(req.user?.access_token);
+  @ApiOperation({ summary: 'Refresh user token' })
+  @ApiResponse({ status: 200, description: 'Token refreshed successfully' })
+  async refresh(@Request() req: UserRequest<Request>) {
+    try {
+      return this.authService.refresh(req.user.access_token);
+    } catch (error) {
+      this.logger.error('Error during token refresh', error.stack);
+      throw error;
+    }
   }
 
   @Post('logout')
   @UseGuards(SupabaseAuthGuard)
-  async logout(@Request() req: any) {
-    return this.authService.logout(req.user?.access_token);
+  @ApiOperation({ summary: 'Logout user' })
+  @ApiResponse({ status: 200, description: 'User logged out successfully' })
+  async logout(@Request() req: UserRequest<Request>) {
+    try {
+      return this.authService.logout(req.user.access_token);
+    } catch (error) {
+      this.logger.error('Error during logout', error.stack);
+      throw error;
+    }
   }
 
   @Get('profile')
   @UseGuards(SupabaseAuthGuard)
-  async getProfile(@Request() req: any) {
-    return this.authService.getUserProfile(req.user?.access_token);
+  @ApiOperation({ summary: 'Get user profile' })
+  @ApiResponse({ status: 200, description: 'User profile fetched successfully' })
+  async getProfile(@Request() req: UserRequest<Request>) {
+    try {
+      return this.authService.getUserProfile(req.user.access_token);
+    } catch (error) {
+      this.logger.error('Error during profile fetch', error.stack);
+      throw error;
+    }
   }
 }
