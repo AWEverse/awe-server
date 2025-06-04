@@ -28,7 +28,7 @@ export class AuthController {
   @ApiResponse({ status: 201, description: 'User registered successfully' })
   async register(@Body() body: RegisterDto) {
     try {
-      return this.authService.register(body.email, body.password, body.username);
+      return await this.authService.register(body.email, body.password, body.username);
     } catch (error) {
       this.logger.error('Error during registration', error.stack);
       throw error;
@@ -40,9 +40,20 @@ export class AuthController {
   @ApiResponse({ status: 200, description: 'User logged in successfully' })
   async login(@Body() body: LoginDto) {
     try {
-      return this.authService.login(body.email, body.password);
+      return await this.authService.login(body.email, body.password);
     } catch (error) {
       this.logger.error('Error during login', error.stack);
+      throw error;
+    }
+  }
+  @Post('social/:provider')
+  @ApiOperation({ summary: 'Sign in with social provider (Google, Twitter)' })
+  @ApiResponse({ status: 200, description: 'Social login successful' })
+  async socialSignIn(@Body('provider') provider: 'google' | 'twitter') {
+    try {
+      return await this.authService.socialSignIn(provider);
+    } catch (error) {
+      this.logger.error(`Error during ${provider} login`, error.stack);
       throw error;
     }
   }
@@ -53,7 +64,7 @@ export class AuthController {
   @ApiResponse({ status: 200, description: 'Token refreshed successfully' })
   async refresh(@Request() req: UserRequest<Request>) {
     try {
-      return this.authService.refresh(req.user.access_token);
+      return await this.authService.refresh(req.user.access_token);
     } catch (error) {
       this.logger.error('Error during token refresh', error.stack);
       throw error;
@@ -66,7 +77,7 @@ export class AuthController {
   @ApiResponse({ status: 200, description: 'User logged out successfully' })
   async logout(@Request() req: UserRequest<Request>) {
     try {
-      return this.authService.logout(req.user.access_token);
+      return await this.authService.logout(req.user.access_token);
     } catch (error) {
       this.logger.error('Error during logout', error.stack);
       throw error;
@@ -79,7 +90,7 @@ export class AuthController {
   @ApiResponse({ status: 200, description: 'User profile fetched successfully' })
   async getProfile(@Request() req: UserRequest<Request>) {
     try {
-      return this.authService.getUserProfile(req.user.access_token);
+      return await this.authService.getUserProfile(req.user.access_token);
     } catch (error) {
       this.logger.error('Error during profile fetch', error.stack);
       throw error;

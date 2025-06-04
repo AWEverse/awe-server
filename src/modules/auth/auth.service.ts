@@ -1,4 +1,4 @@
-import { Injectable } from '@nestjs/common';
+import { Injectable, ConflictException, UnauthorizedException } from '@nestjs/common';
 import { SupabaseAuthService } from '../../libs/supabase/auth/supabase-auth.service';
 import { PrismaService } from '../../libs/supabase/db/prisma.service';
 
@@ -10,21 +10,29 @@ export class AuthService {
   ) {}
 
   async refresh(access_token: string) {
-    const session = await this.supabaseAuth.refreshSession(access_token);
-    if (!session) throw new Error('Failed to refresh session');
+    const result = await this.supabaseAuth.refreshSession(access_token);
+    if (!result || !result.session || !result.user) {
+      throw new UnauthorizedException('Failed to refresh session');
+    }
 
     const user = await this.prisma.user.findUnique({
-      where: { email: session.user.email },
+      where: { email: result.user.email },
     });
 
-    if (!user) throw new Error('User not found in database');
+    if (!user) throw new UnauthorizedException('User not found');
 
-    return { user, session };
+    return { user, session: result.session };
   }
 
   async register(email: string, password: string, username: string) {
-    const { user, session } = await this.supabaseAuth.signUp(email, password);
-    if (!user) throw new Error('Failed to register user in Supabase');
+    // Check for existing user
+    const existingUser = await this.prisma.user.findUnique({ where: { email } });
+    if (existingUser) throw new ConflictException('Email already exists');
+
+    const result = await this.supabaseAuth.signUp(email, password);
+    if (!result || !result.user) {
+      throw new UnauthorizedException('Failed to register user');
+    }
 
     const newUser = await this.prisma.user.create({
       data: {
@@ -33,40 +41,48 @@ export class AuthService {
       },
     });
 
-    return { user: newUser, session };
+    return { user: newUser, session: result.session };
   }
 
   async login(email: string, password: string) {
-    const { user, session } = await this.supabaseAuth.signIn(email, password);
-    if (!user) throw new Error('Failed to login user in Supabase');
-
-    const dbUser = await this.prisma.user.findUnique({
-      where: { email: user.email },
-    });
-
-    if (!dbUser) {
-      throw new Error('User not found in database');
+    const result = await this.supabaseAuth.signIn(email, password);
+    if (!result || !result.user) {
+      throw new UnauthorizedException('Invalid credentials');
     }
 
-    return { user: dbUser, session };
+    const dbUser = await this.prisma.user.findUnique({
+      where: { email: result.user.email },
+    });
+
+    if (!dbUser) throw new UnauthorizedException('User not found');
+
+    return { user: dbUser, session: result.session };
+  }
+
+  async socialSignIn(provider: 'google' | 'twitter') {
+    const result = await this.supabaseAuth.signInWithOAuth(provider);
+    if (!result || !result.url) {
+      throw new UnauthorizedException(`Failed to initiate sign in with ${provider}`);
+    }
+
+    // Return the URL for the client to redirect the user to the provider's OAuth page
+    return { url: result.url };
   }
 
   async logout(jwt: string) {
-    const result = await this.supabaseAuth.signOut(jwt);
-    if (!result) throw new Error('Failed to logout');
-
+    await this.supabaseAuth.signOut(jwt);
     return { message: 'Logout successful' };
   }
 
   async getUserProfile(jwt: string) {
     const supabaseUser = await this.supabaseAuth.getUser(jwt);
-    if (!supabaseUser) throw new Error('Invalid token');
+    if (!supabaseUser) throw new UnauthorizedException('Invalid token');
 
     const dbUser = await this.prisma.user.findUnique({
       where: { email: supabaseUser.email },
     });
 
-    if (!dbUser) throw new Error('User not found in database');
+    if (!dbUser) throw new UnauthorizedException('User not found');
 
     return { ...dbUser, supabaseUser };
   }

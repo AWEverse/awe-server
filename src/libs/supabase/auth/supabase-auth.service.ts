@@ -1,60 +1,103 @@
 import { Injectable, UnauthorizedException, BadRequestException } from '@nestjs/common';
-import { createClient, SupabaseClient } from '@supabase/supabase-js';
-import axios from 'axios';
+import { createClient, SupabaseClient, AuthError } from '@supabase/supabase-js';
+import axios, { AxiosError } from 'axios';
 
 @Injectable()
 export class SupabaseAuthService {
-  private client: SupabaseClient;
+  private readonly client: SupabaseClient;
 
   constructor() {
-    if (!process.env.SUPABASE_URL || !process.env.SUPABASE_KEY) {
-      throw new Error('SUPABASE_URL and SUPABASE_KEY must be defined in environment variables');
+    const supabaseUrl = process.env.SUPABASE_URL;
+    const supabaseKey = process.env.SUPABASE_KEY;
+
+    if (!supabaseUrl || !supabaseKey) {
+      throw new Error('Missing SUPABASE_URL or SUPABASE_KEY environment variables');
     }
-    this.client = createClient(
-      process.env.SUPABASE_URL as string,
-      process.env.SUPABASE_KEY as string,
-    );
+
+    this.client = createClient(supabaseUrl, supabaseKey, {
+      auth: {
+        autoRefreshToken: true,
+        persistSession: false,
+      },
+    });
+  }
+
+  private handleAuthError(error: AuthError | AxiosError | Error, defaultMessage: string) {
+    if (error instanceof AxiosError) {
+      throw new UnauthorizedException(error.response?.data?.message || defaultMessage);
+    }
+    throw error instanceof AuthError
+      ? new UnauthorizedException(error.message)
+      : new BadRequestException(error.message || defaultMessage);
   }
 
   async signUp(email: string, password: string) {
-    const { data, error } = await this.client.auth.signUp({ email, password });
-    if (error) throw new BadRequestException(error.message);
-    return data;
+    try {
+      const { data, error } = await this.client.auth.signUp({ email, password });
+      if (error) throw error;
+      return { user: data.user, session: data.session };
+    } catch (error) {
+      this.handleAuthError(error as AuthError, 'Failed to register user');
+      return undefined;
+    }
   }
 
   async signIn(email: string, password: string) {
-    const { data, error } = await this.client.auth.signInWithPassword({ email, password });
-    if (error) throw new UnauthorizedException(error.message);
-    return data;
+    try {
+      const { data, error } = await this.client.auth.signInWithPassword({ email, password });
+      if (error) throw error;
+      return { user: data.user, session: data.session };
+    } catch (error) {
+      this.handleAuthError(error as AuthError, 'Invalid credentials');
+      return undefined;
+    }
+  }
+
+  async signInWithOAuth(provider: 'google' | 'twitter') {
+    try {
+      const { data, error } = await this.client.auth.signInWithOAuth({
+        provider,
+      });
+      if (error) throw error;
+      return { provider: data.provider, url: data.url };
+    } catch (error) {
+      this.handleAuthError(error as AuthError, `Failed to sign in with ${provider}`);
+      return undefined;
+    }
   }
 
   async signOut(jwt: string) {
     try {
-      await axios.post(
-        `${process.env.SUPABASE_URL}/auth/v1/logout`,
-        {},
-        {
-          headers: {
-            apiKey: process.env.SUPABASE_KEY,
-            Authorization: `Bearer ${jwt}`,
-          },
-        },
-      );
+      // Set the session manually and then sign out
+      await this.client.auth.setSession({ access_token: jwt, refresh_token: '' });
+      const { error } = await this.client.auth.signOut();
+      if (error) throw error;
       return { message: 'Signed out successfully' };
     } catch (error) {
-      throw new UnauthorizedException('Failed to sign out');
+      this.handleAuthError(error as AuthError, 'Failed to sign out');
+      return undefined;
     }
   }
 
   async getUser(jwt: string) {
-    const { data, error } = await this.client.auth.getUser(jwt);
-    if (error) throw new UnauthorizedException(error.message);
-    return data.user;
+    try {
+      const { data, error } = await this.client.auth.getUser(jwt);
+      if (error) throw error;
+      return data.user;
+    } catch (error) {
+      this.handleAuthError(error as AuthError, 'Invalid token');
+      return null;
+    }
   }
 
   async refreshSession(refresh_token: string) {
-    const { data, error } = await this.client.auth.refreshSession({ refresh_token });
-    if (error) throw new UnauthorizedException(error.message);
-    return data.session;
+    try {
+      const { data, error } = await this.client.auth.refreshSession({ refresh_token });
+      if (error) throw error;
+      return { user: data.user, session: data.session };
+    } catch (error) {
+      this.handleAuthError(error as AuthError, 'Failed to refresh session');
+      return undefined;
+    }
   }
 }

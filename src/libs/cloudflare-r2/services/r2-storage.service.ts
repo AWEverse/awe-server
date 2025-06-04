@@ -235,7 +235,7 @@ export class R2StorageService {
     }
 
     const config = this.fileTypeConfigs[fileType];
-    const bucket = this.r2Client.getBucketName(validation.suggestedBucket);
+    const bucket = this.r2Client.getBucketName(validation.suggestedBucket || 'documents');
 
     // Генерация уникального ключа
     const timestamp = Date.now();
