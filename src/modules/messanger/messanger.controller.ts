@@ -24,6 +24,8 @@ import {
   EditMessageDto,
   AddParticipantDto,
   UpdateParticipantRoleDto,
+  CheckPermissionsDto,
+  ArchiveMessagesDto,
 } from './dto/chat.dto';
 import { ChatType, MessageType, ChatRole } from './types';
 import {
@@ -651,6 +653,110 @@ export class MessangerController {
       return await this.messengerService.deleteMessage(BigInt(messageId), userId, forEveryone);
     } catch (error) {
       this.logger.error(`Error deleting message ${messageId}`, error.stack);
+      throw error;
+    }
+  }
+
+  // ===============================================
+  // PERMISSIONS & ARCHIVING
+  // ===============================================
+
+  @Post('chats/:chatId/permissions/check')
+  @ApiOperation({
+    summary: 'Check user permissions',
+    description: 'Check if the user has specific permissions in the chat',
+  })
+  @ApiParam({ name: 'chatId', description: 'Chat ID', type: 'number' })
+  @ApiResponse({
+    status: 200,
+    description: 'Permissions checked successfully',
+    schema: {
+      type: 'object',
+      properties: {
+        success: { type: 'boolean', example: true },
+        data: {
+          type: 'object',
+          description: 'Object with permission names as keys and boolean values',
+          example: {
+            SEND_MESSAGES: true,
+            DELETE_MESSAGES: false,
+            BAN_MEMBERS: true,
+          },
+        },
+      },
+    },
+  })
+  @ApiResponse({ status: 403, description: 'No access to this chat' })
+  @ApiResponse({ status: 404, description: 'Chat not found' })
+  async checkUserPermissions(
+    @Param('chatId', ParseIntPipe) chatId: number,
+    @Body(ValidationPipe) checkPermissionsDto: CheckPermissionsDto,
+    @Request() req: UserRequest,
+  ) {
+    try {
+      const userId = this.getUserIdFromRequest(req);
+      this.logger.log(
+        `Checking permissions for user ${userId} in chat ${chatId}: ${checkPermissionsDto.permissions.join(', ')}`,
+      );
+
+      return await this.messengerService.checkUserPermissions(
+        BigInt(chatId),
+        userId,
+        checkPermissionsDto.permissions,
+      );
+    } catch (error) {
+      const userId = this.getUserIdFromRequest(req);
+      this.logger.error(
+        `Error checking permissions for user ${userId} in chat ${chatId}`,
+        error.stack,
+      );
+      throw error;
+    }
+  }
+
+  @Post('chats/:chatId/archive')
+  @ApiOperation({
+    summary: 'Archive old messages',
+    description: 'Archive messages older than specified date (admin/owner only)',
+  })
+  @ApiParam({ name: 'chatId', description: 'Chat ID', type: 'number' })
+  @ApiResponse({
+    status: 200,
+    description: 'Messages archived successfully',
+    schema: {
+      type: 'object',
+      properties: {
+        success: { type: 'boolean', example: true },
+        data: {
+          type: 'object',
+          properties: {
+            archivedCount: { type: 'number', example: 150 },
+            storageFreed: { type: 'number', example: 2048, description: 'Storage freed in KB' },
+          },
+        },
+      },
+    },
+  })
+  @ApiResponse({ status: 403, description: 'Only admins and owners can archive messages' })
+  @ApiResponse({ status: 404, description: 'Chat not found' })
+  async archiveOldMessages(
+    @Param('chatId', ParseIntPipe) chatId: number,
+    @Body(ValidationPipe) archiveMessagesDto: ArchiveMessagesDto,
+    @Request() req: UserRequest,
+  ) {
+    try {
+      const userId = this.getUserIdFromRequest(req);
+      this.logger.log(
+        `Archiving messages older than ${archiveMessagesDto.beforeDate.toISOString()} in chat ${chatId} by user ${userId}`,
+      );
+
+      return await this.messengerService.archiveOldMessages(
+        BigInt(chatId),
+        archiveMessagesDto.beforeDate,
+        userId,
+      );
+    } catch (error) {
+      this.logger.error(`Error archiving messages in chat ${chatId}`, error.stack);
       throw error;
     }
   }

@@ -18,6 +18,7 @@ import {
   ChatType,
   MessageType,
   ChatRole,
+  ChatPermission,
   ChatFlags,
   ChatParticipantFlags,
   MessageFlags,
@@ -25,7 +26,6 @@ import {
 } from './types';
 import { ChatStatistics, UserChatStatistics } from './types/statistics.type';
 import { MessangerRepository } from './messanger.repository';
-import { callPgFunction } from '../common/db/callPgFunction';
 
 @Injectable()
 export class MessangerService implements IChatService {
@@ -33,19 +33,115 @@ export class MessangerService implements IChatService {
     private readonly prisma: PrismaService,
     private readonly repo: MessangerRepository,
   ) {}
+  async getUserStatistics(userId: bigint, requesterId: bigint): Promise<UserChatStatistics> {
+    // Check if requester has permission to view user stats
+    if (userId !== requesterId) {
+      // Only allow viewing other users' stats if they are in shared chats
+      const sharedChats = await this.prisma.chatParticipant.count({
+        where: {
+          chat: {
+            participants: {
+              some: { userId: requesterId, leftAt: undefined },
+            },
+          },
+          userId: userId,
+          leftAt: undefined,
+        },
+      });
 
-  getUserStatistics(userId: bigint, requesterId: bigint): Promise<UserChatStatistics> {
-    throw new Error('Method not implemented.');
+      if (sharedChats === 0) {
+        throw new ForbiddenException("No permission to view this user's statistics");
+      }
+    }
+
+    const [messagesSent, totalChats, activeChats, lastActivity, mostActiveData] = await Promise.all(
+      [
+        this.prisma.message.count({
+          where: { senderId: userId, deletedAt: undefined },
+        }),
+        this.prisma.chatParticipant.count({
+          where: { userId, leftAt: undefined },
+        }),
+        this.prisma.chatParticipant.count({
+          where: {
+            userId,
+            leftAt: undefined,
+            chat: { deletedAt: undefined },
+          },
+        }),
+        this.prisma.message.findFirst({
+          where: { senderId: userId, deletedAt: undefined },
+          orderBy: { createdAt: 'desc' },
+          select: { createdAt: true },
+        }),
+        this.prisma.message.groupBy({
+          by: ['chatId'],
+          where: { senderId: userId, deletedAt: undefined },
+          _count: { id: true },
+          orderBy: { _count: { id: 'desc' } },
+          take: 1,
+        }),
+      ],
+    );
+
+    const mostActiveChat = mostActiveData.length > 0 ? mostActiveData[0] : null;
+    let chatTitle: string | undefined;
+
+    if (mostActiveChat) {
+      const chat = await this.prisma.chat.findUnique({
+        where: { id: mostActiveChat.chatId },
+        select: { title: true },
+      });
+      chatTitle = chat?.title || undefined;
+    }
+
+    return {
+      userId,
+      totalChats,
+      activeChats,
+      archivedChats: 0, // Would need to implement archiving
+      messagesSent,
+      messagesReceived: 0, // Would need to count messages in user's chats
+      mediaShared: 0, // Would need to count media attachments
+      averageResponseTime: 300, // Placeholder - would need complex calculation
+      mostActiveChat: mostActiveChat
+        ? {
+            chatId: mostActiveChat.chatId,
+            messageCount: mostActiveChat._count.id,
+            chatTitle,
+          }
+        : {
+            chatId: BigInt(0),
+            messageCount: 0,
+          },
+      dailyActivity: [], // Would need aggregation by date
+      lastActivity: lastActivity?.createdAt || new Date(0),
+    };
   }
-
-  getUnreadInfo(userId: bigint): Promise<{
+  async getUnreadInfo(userId: bigint): Promise<{
     totalUnread: number;
     chatUnreads: Array<{ chatId: bigint; unreadCount: number; lastMessageAt: Date }>;
   }> {
-    throw new Error('Method not implemented.');
-  }
+    try {
+      const unreadData = await this.repo.getUnreadInfoRaw(userId);
 
-  searchMessages(
+      const chatUnreads = unreadData.map(item => ({
+        chatId: item.chat_id,
+        unreadCount: Number(item.unread_count),
+        lastMessageAt: item.last_message_at,
+      }));
+
+      const totalUnread = chatUnreads.reduce((sum, chat) => sum + chat.unreadCount, 0);
+
+      return {
+        totalUnread,
+        chatUnreads,
+      };
+    } catch (error) {
+      throw new BadRequestException(`Failed to get unread info: ${error.message}`);
+    }
+  }
+  async searchMessages(
     chatId: bigint,
     userId: bigint,
     query: string,
@@ -58,7 +154,92 @@ export class MessangerService implements IChatService {
       offset?: number;
     },
   ): Promise<PaginatedMessages> {
-    throw new Error('Method not implemented.');
+    // Check if user has access to this chat
+    const hasAccess = await this.checkChatAccess(chatId, userId);
+    if (!hasAccess) {
+      throw new ForbiddenException('No access to this chat');
+    }
+
+    const limit = options?.limit ?? 50;
+    const offset = options?.offset ?? 0;
+
+    // Build where clause for search
+    const where: any = {
+      chatId,
+      deletedAt: undefined,
+      OR: [
+        { content: { search: query } },
+        // For text search in Buffer content (simplified)
+      ],
+    };
+
+    if (options?.messageType) {
+      where.messageType = options.messageType;
+    }
+
+    if (options?.fromUserId) {
+      where.senderId = options.fromUserId;
+    }
+
+    if (options?.dateFrom || options?.dateTo) {
+      where.createdAt = {};
+      if (options.dateFrom) where.createdAt.gte = options.dateFrom;
+      if (options.dateTo) where.createdAt.lte = options.dateTo;
+    }
+
+    const messages = await this.prisma.message.findMany({
+      where,
+      include: {
+        sender: {
+          select: {
+            id: true,
+            username: true,
+            fullName: true,
+            avatarUrl: true,
+            flags: true,
+            lastSeen: true,
+          },
+        },
+        replyTo: {
+          include: {
+            sender: {
+              select: {
+                id: true,
+                username: true,
+                fullName: true,
+                avatarUrl: true,
+                flags: true,
+                lastSeen: true,
+              },
+            },
+          },
+        },
+        attachments: true,
+        reactions: {
+          include: {
+            user: {
+              select: {
+                id: true,
+                username: true,
+                fullName: true,
+                avatarUrl: true,
+                flags: true,
+                lastSeen: true,
+              },
+            },
+          },
+        },
+      },
+      orderBy: { createdAt: 'desc' },
+      take: limit,
+      skip: offset,
+    });
+
+    return {
+      messages: messages.map(m => this.formatMessageInfo(m)),
+      hasMore: messages.length === limit,
+      nextCursor: messages.length === limit ? String(offset + limit) : undefined,
+    };
   }
 
   async createChat(
@@ -486,14 +667,13 @@ export class MessangerService implements IChatService {
       nextCursor: messages.length === limit ? String(messages[messages.length - 1].id) : undefined,
     };
   }
-
   async getChatParticipants(
     chatId: bigint,
     userId: bigint,
     options?: {
+      role?: ChatRole;
       limit?: number;
       offset?: number;
-      roleFilter?: ChatRole;
     },
   ): Promise<ChatParticipantInfo[]> {
     const limit = options?.limit ?? 100;
@@ -503,7 +683,7 @@ export class MessangerService implements IChatService {
       userId,
       limit,
       offset,
-      options?.roleFilter,
+      options?.role,
     );
     return participants.map(p => ({
       id: BigInt(0),
@@ -568,8 +748,13 @@ export class MessangerService implements IChatService {
 
     return true;
   }
-
-  async removeParticipant(chatId: bigint, userId: bigint, removedById: bigint): Promise<boolean> {
+  async removeParticipant(
+    chatId: bigint,
+    userId: bigint,
+    removedById: bigint,
+    ban?: boolean,
+    reason?: string,
+  ): Promise<boolean> {
     const hasAccess = await this.checkChatAccess(chatId, removedById);
     if (!hasAccess) {
       throw new ForbiddenException('No permission to remove members');
@@ -587,11 +772,18 @@ export class MessangerService implements IChatService {
       throw new NotFoundException('Participant not found');
     }
 
+    const updateData: any = {
+      leftAt: new Date(),
+    };
+
+    // If banning, set the ban flag
+    if (ban) {
+      updateData.flags = { increment: 8 }; // Ban flag
+    }
+
     await this.prisma.chatParticipant.update({
       where: { id: participant.id },
-      data: {
-        leftAt: new Date(),
-      },
+      data: updateData,
     });
 
     await this.prisma.chat.update({
@@ -649,9 +841,73 @@ export class MessangerService implements IChatService {
       },
     }));
   }
-
   async getChatStatistics(chatId: bigint, userId: bigint): Promise<ChatStatistics> {
-    throw new Error('Method not implemented.');
+    // Check if user has access to this chat
+    const hasAccess = await this.checkChatAccess(chatId, userId);
+    if (!hasAccess) {
+      throw new ForbiddenException('No access to this chat');
+    }
+
+    try {
+      const [chat, messageStats, participantStats] = await Promise.all([
+        this.prisma.chat.findUnique({
+          where: { id: chatId },
+          select: {
+            id: true,
+            memberCount: true,
+            createdAt: true,
+            updatedAt: true,
+          },
+        }),
+        this.prisma.message.aggregate({
+          where: { chatId, deletedAt: undefined },
+          _count: { id: true },
+        }),
+        this.prisma.chatParticipant.count({
+          where: { chatId, leftAt: undefined },
+        }),
+      ]);
+
+      if (!chat) {
+        throw new NotFoundException('Chat not found');
+      }
+
+      // Get message type distribution
+      const messageTypes = await this.prisma.message.groupBy({
+        by: ['messageType'],
+        where: { chatId, deletedAt: undefined },
+        _count: { id: true },
+      });
+
+      const textMessages = messageTypes.find(t => t.messageType === 'TEXT')?._count.id || 0;
+      const mediaMessages = messageTypes
+        .filter(t => t.messageType !== 'TEXT')
+        .reduce((sum, t) => sum + t._count.id, 0);
+
+      // Get recent activity for peak detection (simplified)
+      const recentActivity = await this.prisma.message.findFirst({
+        where: { chatId, deletedAt: undefined },
+        orderBy: { createdAt: 'desc' },
+        select: { createdAt: true },
+      });
+
+      return {
+        id: BigInt(Date.now()), // Generate unique stats ID
+        chatId,
+        messageCount: messageStats._count.id,
+        participantCount: participantStats,
+        activeParticipants: participantStats, // Simplified - would need last activity check
+        totalMessages: messageStats._count.id,
+        mediaMessages,
+        textMessages,
+        averageResponseTime: 300, // Placeholder - would need complex calculation
+        peakActivity: recentActivity?.createdAt || new Date(),
+        createdAt: new Date(),
+        updatedAt: new Date(),
+      };
+    } catch (error) {
+      throw new BadRequestException(`Failed to get chat statistics: ${error.message}`);
+    }
   }
 
   private async checkChatAccess(chatId: bigint, userId: bigint): Promise<boolean> {
@@ -1085,9 +1341,8 @@ export class MessangerService implements IChatService {
     const info = await this.getUnreadInfo(userId);
     return info.totalUnread;
   }
-
   async getUserChatStatistics(userId: bigint): Promise<UserChatStatistics> {
-    throw new Error('Method not implemented.');
+    return this.getUserStatistics(userId, userId);
   }
 
   // Исправление: корректная типизация UserInfo для reactions
@@ -1168,22 +1423,205 @@ export class MessangerService implements IChatService {
     });
     return deleted.count;
   }
-
   async checkUserPermissions(
     chatId: bigint,
     userId: bigint,
     permissions: string[],
   ): Promise<Record<string, boolean>> {
-    // Пример: всегда true
-    return Object.fromEntries(permissions.map(p => [p, true]));
-  }
+    try {
+      // Get user's participant info in the chat
+      const participant = await this.prisma.chatParticipant.findFirst({
+        where: {
+          chatId,
+          userId,
+          leftAt: null,
+        },
+        select: {
+          role: true,
+          flags: true,
+        },
+      });
 
+      if (!participant) {
+        // User is not a participant - deny all permissions
+        return Object.fromEntries(permissions.map(p => [p, false]));
+      }
+
+      const { role, flags } = participant;
+      const result: Record<string, boolean> = {}; // Check each permission based on role and flags
+      for (const permission of permissions) {
+        result[permission] = this.hasPermission(role as ChatRole, flags, permission);
+      }
+
+      return result;
+    } catch (error) {
+      // On error, deny all permissions for safety
+      return Object.fromEntries(permissions.map(p => [p, false]));
+    }
+  }
   async archiveOldMessages(
     chatId: bigint,
     beforeDate: Date,
     userId: bigint,
   ): Promise<{ archivedCount: number; storageFreed: number }> {
-    // Заглушка: ничего не архивируем
-    return { archivedCount: 0, storageFreed: 0 };
+    try {
+      // Check if user has permission to archive messages
+      const hasAccess = await this.checkChatAccess(chatId, userId);
+      if (!hasAccess) {
+        throw new ForbiddenException('No permission to archive messages in this chat');
+      }
+
+      // Get participant info to check if user is admin/owner
+      const participant = await this.prisma.chatParticipant.findFirst({
+        where: {
+          chatId,
+          userId,
+          leftAt: null,
+        },
+        select: {
+          role: true,
+        },
+      });
+      if (!participant || !['OWNER', 'ADMIN'].includes(participant.role as string)) {
+        throw new ForbiddenException('Only owners and admins can archive messages');
+      }
+
+      // Find messages to archive
+      const messagesToArchive = await this.prisma.message.findMany({
+        where: {
+          chatId,
+          createdAt: {
+            lt: beforeDate,
+          },
+          deletedAt: null,
+          // Don't archive system messages or pinned messages
+          NOT: {
+            OR: [
+              { messageType: 'SYSTEM' },
+              { flags: { gt: 0 } }, // Messages with flags (like pinned)
+            ],
+          },
+        },
+        select: {
+          id: true,
+          content: true,
+          attachments: {
+            select: {
+              fileSize: true,
+            },
+          },
+        },
+      });
+
+      if (messagesToArchive.length === 0) {
+        return { archivedCount: 0, storageFreed: 0 };
+      }
+
+      // Calculate storage freed (approximate)
+      const storageFreed = messagesToArchive.reduce((total, message) => {
+        let messageSize = Buffer.isBuffer(message.content)
+          ? message.content.length
+          : Buffer.byteLength(message.content?.toString() || '', 'utf8');
+        // Add attachment sizes
+        const attachmentSize = message.attachments.reduce(
+          (sum, att) => sum + (att.fileSize || 0),
+          0,
+        );
+
+        return total + messageSize + attachmentSize;
+      }, 0);
+
+      // Archive messages by marking them as deleted
+      const messageIds = messagesToArchive.map(m => m.id);
+
+      await this.prisma.$transaction(async tx => {
+        // Update messages to mark as archived (using flags)
+        await tx.message.updateMany({
+          where: {
+            id: { in: messageIds },
+          },
+          data: {
+            flags: { increment: 32 }, // Custom flag for archived messages
+            updatedAt: new Date(),
+          },
+        });
+
+        // Optionally clean up related data for very old messages
+        if (beforeDate < new Date(Date.now() - 365 * 24 * 60 * 60 * 1000)) {
+          // Older than 1 year
+          // Remove message reads for archived messages
+          await tx.messageRead.deleteMany({
+            where: {
+              messageId: { in: messageIds },
+            },
+          });
+
+          // Remove reactions for archived messages
+          await tx.messageReaction.deleteMany({
+            where: {
+              messageId: { in: messageIds },
+            },
+          });
+        }
+      });
+
+      return {
+        archivedCount: messageIds.length,
+        storageFreed: Math.round(storageFreed / 1024), // Return in KB
+      };
+    } catch (error) {
+      if (error instanceof ForbiddenException) {
+        throw error;
+      }
+      throw new BadRequestException(`Failed to archive messages: ${error.message}`);
+    }
+  }
+
+  /**
+   * Helper method to check if user has specific permission based on role and flags
+   */
+  private hasPermission(role: ChatRole, flags: number, permission: string): boolean {
+    // Check if user is banned
+    if (flags & ChatParticipantFlags.BANNED) {
+      return false;
+    }
+
+    // Check if user is muted for message sending permissions
+    if (
+      flags & ChatParticipantFlags.MUTED &&
+      ['SEND_MESSAGES', 'SEND_MEDIA'].includes(permission)
+    ) {
+      return false;
+    }
+
+    // Permission matrix based on role
+    switch (role) {
+      case ChatRole.OWNER:
+        return true; // Owners have all permissions      case ChatRole.ADMIN:
+        // Admins have most permissions except some owner-only ones
+        const adminDeniedPermissions = ['DELETE_CHAT', 'TRANSFER_OWNERSHIP'];
+        return !adminDeniedPermissions.includes(permission);
+
+      case ChatRole.MODERATOR:
+        return [
+          'SEND_MESSAGES',
+          'SEND_MEDIA',
+          'PIN_MESSAGES',
+          'DELETE_MESSAGES',
+          'BAN_MEMBERS',
+          'REMOVE_MEMBERS',
+        ].includes(permission);
+
+      case ChatRole.MEMBER:
+        return ['SEND_MESSAGES', 'SEND_MEDIA'].includes(permission);
+
+      case ChatRole.SUBSCRIBER:
+        return [
+          'SEND_MESSAGES', // Read-only by default, but can be configured
+        ].includes(permission);
+
+      default:
+        return false;
+    }
   }
 }

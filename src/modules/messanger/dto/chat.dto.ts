@@ -304,3 +304,16 @@ export class BulkModerationDto {
   @MaxLength(500)
   reason?: string;
 }
+
+export class CheckPermissionsDto {
+  @IsArray()
+  @IsString({ each: true })
+  @IsNotEmpty({ each: true })
+  permissions: string[];
+}
+
+export class ArchiveMessagesDto {
+  @IsString()
+  @Transform(({ value }) => new Date(value))
+  beforeDate: Date;
+}
