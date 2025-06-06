@@ -143,6 +143,7 @@ enum ReportStatus {
 enum ModerationAction {
   NONE
   WARN
+  LOCK
   TIMEOUT
   DELETE_CONTENT
   SUSPEND_USER

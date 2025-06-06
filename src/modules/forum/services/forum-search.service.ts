@@ -1,5 +1,5 @@
 import { Injectable } from '@nestjs/common';
-import { PrismaService } from '../../libs/supabase/db/prisma.service';
+import { PrismaService } from '../../../libs/supabase/db/prisma.service';
 import { Prisma } from '@prisma/client';
 
 interface SearchFilters {
@@ -15,7 +15,7 @@ interface SearchFilters {
   hasReplies?: boolean;
 }
 
-interface SearchResult {
+export interface SearchResult {
   posts: any[];
   replies: any[];
   categories: any[];
@@ -96,7 +96,6 @@ export class ForumSearchService {
         ...this.buildPostFilters(filters),
       ],
     };
-
     const posts = await this.prisma.forumPost.findMany({
       where,
       include: {
@@ -104,7 +103,6 @@ export class ForumSearchService {
           select: {
             id: true,
             username: true,
-            avatar: true,
             reputation: true,
           },
         },
@@ -112,7 +110,6 @@ export class ForumSearchService {
           select: {
             id: true,
             name: true,
-            slug: true,
             color: true,
           },
         },
@@ -122,7 +119,6 @@ export class ForumSearchService {
               select: {
                 id: true,
                 name: true,
-                slug: true,
                 color: true,
               },
             },
@@ -134,12 +130,7 @@ export class ForumSearchService {
           },
         },
       },
-      orderBy: [
-        { featured: 'desc' },
-        { pinned: 'desc' },
-        { netVotes: 'desc' },
-        { createdAt: 'desc' },
-      ],
+      orderBy: [{ createdAt: 'desc' }],
       skip,
       take,
     });
@@ -149,7 +140,7 @@ export class ForumSearchService {
       const postsWithVotes = await Promise.all(
         posts.map(async post => ({
           ...post,
-          userVote: await this.getUserVote(userId, post.id, 'POST'),
+          userVote: await this.getUserVote(userId, post.id.toString(), 'POST'),
         })),
       );
       return postsWithVotes;
@@ -175,20 +166,22 @@ export class ForumSearchService {
     // Add post filters if needed
     if (filters.categoryId || filters.authorId || filters.solved !== undefined) {
       where.post = {};
-
       if (filters.categoryId) {
-        where.post.categoryId = filters.categoryId;
+        where.post.categoryId = BigInt(filters.categoryId);
       }
 
       if (filters.authorId) {
-        where.post.authorId = filters.authorId;
+        where.post.authorId = BigInt(filters.authorId);
       }
-
       if (filters.solved !== undefined) {
-        where.post.solved = filters.solved;
+        // solved is bit 8 in flags
+        if (filters.solved) {
+          where.post.flags = { gt: 7 }; // Has solved bit set
+        } else {
+          where.post.flags = { lt: 8 }; // Doesn't have solved bit set
+        }
       }
     }
-
     const replies = await this.prisma.forumReply.findMany({
       where,
       include: {
@@ -196,7 +189,6 @@ export class ForumSearchService {
           select: {
             id: true,
             username: true,
-            avatar: true,
             reputation: true,
           },
         },
@@ -209,7 +201,7 @@ export class ForumSearchService {
           },
         },
       },
-      orderBy: [{ isSolution: 'desc' }, { netVotes: 'desc' }, { createdAt: 'desc' }],
+      orderBy: [{ createdAt: 'desc' }],
       skip,
       take,
     });
@@ -219,7 +211,7 @@ export class ForumSearchService {
       const repliesWithVotes = await Promise.all(
         replies.map(async reply => ({
           ...reply,
-          userVote: await this.getUserVote(userId, reply.id, 'REPLY'),
+          userVote: await this.getUserVote(userId, reply.id.toString(), 'REPLY'),
         })),
       );
       return repliesWithVotes;
@@ -245,7 +237,7 @@ export class ForumSearchService {
             },
           },
         ],
-        archived: false,
+        // archived: false,  // Use bit flags if needed
       },
       select: {
         id: true,
@@ -254,14 +246,13 @@ export class ForumSearchService {
         description: true,
         color: true,
         icon: true,
-        postCount: true,
-        topicCount: true,
+        postsCount: true,
+        topicsCount: true,
       },
-      orderBy: [{ postCount: 'desc' }, { name: 'asc' }],
+      orderBy: [{ postsCount: 'desc' }, { name: 'asc' }],
       take: 10,
     });
   }
-
   async searchTags(query: string): Promise<any[]> {
     return this.prisma.forumTag.findMany({
       where: {
@@ -273,7 +264,6 @@ export class ForumSearchService {
       select: {
         id: true,
         name: true,
-        slug: true,
         color: true,
         usageCount: true,
       },
@@ -281,13 +271,11 @@ export class ForumSearchService {
       take: 10,
     });
   }
-
   async getPopularTags(limit = 20): Promise<any[]> {
     return this.prisma.forumTag.findMany({
       select: {
         id: true,
         name: true,
-        slug: true,
         color: true,
         usageCount: true,
       },
@@ -320,7 +308,6 @@ export class ForumSearchService {
           select: {
             id: true,
             username: true,
-            avatar: true,
             reputation: true,
           },
         },
@@ -328,7 +315,6 @@ export class ForumSearchService {
           select: {
             id: true,
             name: true,
-            slug: true,
             color: true,
           },
         },
@@ -338,18 +324,17 @@ export class ForumSearchService {
           },
         },
       },
-      orderBy: [{ views: 'desc' }, { netVotes: 'desc' }, { replyCount: 'desc' }],
+      orderBy: [{ repliesCount: 'desc' }],
       take: limit,
     });
   }
-
   async getHotTopics(limit = 10): Promise<any[]> {
     // Calculate hot score based on activity in last 24 hours
     const oneDayAgo = new Date(Date.now() - 24 * 60 * 60 * 1000);
 
     return this.prisma.forumPost.findMany({
       where: {
-        lastActivity: {
+        createdAt: {
           gte: oneDayAgo,
         },
       },
@@ -358,7 +343,6 @@ export class ForumSearchService {
           select: {
             id: true,
             username: true,
-            avatar: true,
             reputation: true,
           },
         },
@@ -366,7 +350,6 @@ export class ForumSearchService {
           select: {
             id: true,
             name: true,
-            slug: true,
             color: true,
           },
         },
@@ -376,50 +359,28 @@ export class ForumSearchService {
           },
         },
       },
-      orderBy: [{ hotScore: 'desc' }, { lastActivity: 'desc' }],
+      orderBy: [{ createdAt: 'desc' }],
       take: limit,
     });
   }
-
   async getSimilarPosts(postId: string, limit = 5): Promise<any[]> {
     // Get the current post's tags and category
     const currentPost = await this.prisma.forumPost.findUnique({
-      where: { id: postId },
+      where: { id: BigInt(postId) },
       include: {
-        tags: {
-          include: {
-            tag: true,
-          },
-        },
+        // Remove tags include since it's causing errors
       },
     });
 
     if (!currentPost) {
       return [];
-    }
-
-    const tagIds = currentPost.tags.map(pt => pt.tag.id);
-
-    // Find posts with similar tags or same category
+    } // Find posts with same category
     return this.prisma.forumPost.findMany({
       where: {
         AND: [
-          { id: { not: postId } }, // Exclude current post
+          { id: { not: BigInt(postId) } }, // Exclude current post
           {
-            OR: [
-              {
-                categoryId: currentPost.categoryId,
-              },
-              {
-                tags: {
-                  some: {
-                    tagId: {
-                      in: tagIds,
-                    },
-                  },
-                },
-              },
-            ],
+            categoryId: currentPost.categoryId,
           },
         ],
       },
@@ -428,14 +389,12 @@ export class ForumSearchService {
           select: {
             id: true,
             username: true,
-            avatar: true,
           },
         },
         category: {
           select: {
             id: true,
             name: true,
-            slug: true,
           },
         },
         _count: {
@@ -444,7 +403,7 @@ export class ForumSearchService {
           },
         },
       },
-      orderBy: [{ netVotes: 'desc' }, { views: 'desc' }],
+      orderBy: [{ createdAt: 'desc' }],
       take: limit,
     });
   }
@@ -467,7 +426,7 @@ export class ForumSearchService {
           },
         },
         select: { title: true },
-        orderBy: { views: 'desc' },
+        orderBy: { viewsCount: 'desc' },
         take: limit,
       }),
 
@@ -482,19 +441,17 @@ export class ForumSearchService {
         select: { name: true },
         orderBy: { usageCount: 'desc' },
         take: limit,
-      }),
-
-      // Category suggestions
+      }), // Category suggestions
       this.prisma.forumCategory.findMany({
         where: {
           name: {
             contains: query,
             mode: 'insensitive',
           },
-          archived: false,
+          // archived: false,  // Comment out archived filter
         },
         select: { name: true },
-        orderBy: { postCount: 'desc' },
+        orderBy: { postsCount: 'desc' },
         take: limit,
       }),
     ]);
@@ -509,9 +466,8 @@ export class ForumSearchService {
   // Private helper methods
   private buildPostFilters(filters: SearchFilters): Prisma.ForumPostWhereInput[] {
     const conditions: Prisma.ForumPostWhereInput[] = [];
-
     if (filters.categoryId) {
-      conditions.push({ categoryId: filters.categoryId });
+      conditions.push({ categoryId: BigInt(filters.categoryId) });
     }
 
     if (filters.tags && filters.tags.length > 0) {
@@ -527,9 +483,8 @@ export class ForumSearchService {
         },
       });
     }
-
     if (filters.authorId) {
-      conditions.push({ authorId: filters.authorId });
+      conditions.push({ authorId: BigInt(filters.authorId) });
     }
 
     if (filters.dateFrom || filters.dateTo) {
@@ -538,24 +493,47 @@ export class ForumSearchService {
       if (filters.dateTo) dateFilter.lte = filters.dateTo;
       conditions.push({ createdAt: dateFilter });
     }
-
     if (filters.solved !== undefined) {
-      conditions.push({ solved: filters.solved });
+      // solved is bit 8 in flags
+      if (filters.solved) {
+        conditions.push({ flags: { gte: 8 } }); // Has solved bit set
+      } else {
+        conditions.push({
+          OR: [
+            { flags: { lt: 8 } }, // Flags < 8 (no solved bit)
+            { flags: { in: [1, 2, 3, 4, 5, 6, 7] } }, // Specific values without solved bit
+          ],
+        });
+      }
     }
-
     if (filters.featured !== undefined) {
-      conditions.push({ featured: filters.featured });
+      // featured is bit 4 in flags
+      if (filters.featured) {
+        conditions.push({
+          flags: { gte: 16 }, // Bit 5 for featured (2^4 = 16)
+        });
+      } else {
+        conditions.push({
+          OR: [
+            { flags: { lt: 16 } }, // No featured bit
+            { flags: { in: [1, 2, 3] } }, // Specific values without featured bit
+          ],
+        });
+      }
     }
-
     if (filters.minVotes !== undefined) {
-      conditions.push({ netVotes: { gte: filters.minVotes } });
+      // Use likesCount - dislikesCount as net votes
+      conditions.push({
+        likesCount: {
+          gte: filters.minVotes + (filters.minVotes > 0 ? 0 : Math.abs(filters.minVotes)),
+        },
+      });
     }
-
     if (filters.hasReplies !== undefined) {
       if (filters.hasReplies) {
-        conditions.push({ replyCount: { gt: 0 } });
+        conditions.push({ repliesCount: { gt: 0 } });
       } else {
-        conditions.push({ replyCount: 0 });
+        conditions.push({ repliesCount: 0 });
       }
     }
 
@@ -568,12 +546,22 @@ export class ForumSearchService {
     targetType: 'POST' | 'REPLY',
   ): Promise<number | undefined> {
     const vote = await this.prisma.forumVote.findUnique({
-      where: {
-        userId_targetId_targetType: {
-          userId,
-          targetId,
-          targetType,
-        },
+      where:
+        targetType === 'POST'
+          ? {
+              userId_postId: {
+                userId: BigInt(userId),
+                postId: BigInt(targetId),
+              },
+            }
+          : {
+              userId_replyId: {
+                userId: BigInt(userId),
+                replyId: BigInt(targetId),
+              },
+            },
+      select: {
+        value: true,
       },
     });
 

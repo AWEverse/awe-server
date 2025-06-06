@@ -2,22 +2,24 @@ import {
   Controller,
   Get,
   Query,
-  UseGuards,
   Request,
   ParseIntPipe,
   DefaultValuePipe,
+  UseGuards,
 } from '@nestjs/common';
 import { ApiTags, ApiOperation, ApiResponse, ApiQuery } from '@nestjs/swagger';
+import { BaseForumController, OptionalAuthEndpoint } from './base-forum.controller';
 import { ForumSearchService } from '../services/forum-search.service';
-import { OptionalAuthGuard } from '../../auth/guards/optional-auth.guard';
+import { OptionalAuthGuard } from 'src/modules/auth/guards/optional-auth.guard';
 
 @ApiTags('Forum Search')
 @Controller('forum/search')
-export class ForumSearchController {
-  constructor(private readonly forumSearchService: ForumSearchService) {}
-
+export class ForumSearchController extends BaseForumController {
+  constructor(private readonly forumSearchService: ForumSearchService) {
+    super();
+  }
   @Get()
-  @UseGuards(OptionalAuthGuard)
+  @OptionalAuthEndpoint()
   @ApiOperation({ summary: 'Global forum search' })
   @ApiQuery({ name: 'q', description: 'Search query' })
   @ApiQuery({ name: 'category', required: false, description: 'Filter by category ID' })
@@ -81,7 +83,13 @@ export class ForumSearchController {
       hasReplies,
     };
 
-    return this.forumSearchService.globalSearch(query, filters, page, limit, req.user?.id);
+    return this.forumSearchService.globalSearch(
+      query,
+      filters,
+      page,
+      limit,
+      this.getOptionalUserId(req),
+    );
   }
 
   @Get('posts')
@@ -110,8 +118,10 @@ export class ForumSearchController {
       tags: tags ? tags.split(',').map(t => t.trim()) : undefined,
     };
 
-    const skip = (page - 1) * limit;
-    return this.forumSearchService.searchPosts(query, filters, skip, limit, req.user?.id);
+    const pageNum = page ?? 1;
+    const limitNum = limit ?? 20;
+    const skip = (pageNum - 1) * limitNum;
+    return this.forumSearchService.searchPosts(query, filters, skip, limitNum, req.user?.id);
   }
 
   @Get('trending')

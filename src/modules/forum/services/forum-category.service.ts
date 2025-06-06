@@ -4,7 +4,7 @@ import {
   BadRequestException,
   ConflictException,
 } from '@nestjs/common';
-import { PrismaService } from '../../database/prisma.service';
+import { PrismaService } from '../../../libs/supabase/db/prisma.service';
 import {
   CreateForumCategoryDto,
   UpdateForumCategoryDto,
@@ -14,7 +14,6 @@ import {
 @Injectable()
 export class ForumCategoryService {
   constructor(private prisma: PrismaService) {}
-
   async createCategory(
     createCategoryDto: CreateForumCategoryDto,
   ): Promise<ForumCategoryResponseDto> {
@@ -25,12 +24,10 @@ export class ForumCategoryService {
 
     if (existingCategory) {
       throw new ConflictException('Category slug already exists');
-    }
-
-    // Verify parent category exists if parentId is provided
+    } // Verify parent category exists if parentId is provided
     if (createCategoryDto.parentId) {
       const parentCategory = await this.prisma.forumCategory.findUnique({
-        where: { id: createCategoryDto.parentId },
+        where: { id: BigInt(createCategoryDto.parentId) },
         include: { parent: true },
       });
 
@@ -40,35 +37,47 @@ export class ForumCategoryService {
 
       // Check nesting level (max 3 levels)
       let nestingLevel = 1;
-      let current = parentCategory;
-      while (current.parent) {
+      let currentParent = parentCategory.parent;
+      while (currentParent) {
         nestingLevel++;
-        current = current.parent;
         if (nestingLevel >= 3) {
           throw new BadRequestException('Maximum nesting level (3) exceeded');
         }
+        const nextParent = await this.prisma.forumCategory.findUnique({
+          where: { id: currentParent.id },
+          include: { parent: true },
+        });
+        currentParent = nextParent?.parent || null;
       }
     }
 
+    // Transform DTO to Prisma data format
+    const createData = {
+      ...createCategoryDto,
+      parentId: createCategoryDto.parentId ? BigInt(createCategoryDto.parentId) : null,
+    };
+
     const category = await this.prisma.forumCategory.create({
-      data: createCategoryDto,
+      data: createData,
       include: this.getCategoryIncludes(),
     });
 
     return this.transformCategoryToResponse(category);
   }
-
   async findAllCategories(includeArchived = false): Promise<ForumCategoryResponseDto[]> {
     const categories = await this.prisma.forumCategory.findMany({
-      where: includeArchived ? {} : { archived: false },
+      where: {
+        parentId: null, // Only root categories
+        ...(includeArchived ? {} : { flags: { not: { equals: 8 } } }), // archived bit is 8
+      },
       include: {
         ...this.getCategoryIncludes(),
         children: {
-          where: includeArchived ? {} : { archived: false },
+          where: includeArchived ? {} : { flags: { not: { equals: 8 } } },
           include: {
             ...this.getCategoryIncludes(),
             children: {
-              where: includeArchived ? {} : { archived: false },
+              where: includeArchived ? {} : { flags: { not: { equals: 8 } } },
               include: this.getCategoryIncludes(),
               orderBy: { position: 'asc' },
             },
@@ -76,19 +85,14 @@ export class ForumCategoryService {
           orderBy: { position: 'asc' },
         },
       },
-      where: {
-        parentId: null, // Only root categories
-        ...(includeArchived ? {} : { archived: false }),
-      },
       orderBy: { position: 'asc' },
     });
 
     return categories.map(category => this.transformCategoryToResponse(category));
   }
-
   async findCategoryById(id: string): Promise<ForumCategoryResponseDto> {
     const category = await this.prisma.forumCategory.findUnique({
-      where: { id },
+      where: { id: BigInt(id) },
       include: {
         ...this.getCategoryIncludes(),
         children: {
@@ -145,14 +149,13 @@ export class ForumCategoryService {
 
     return this.transformCategoryToResponse(category);
   }
-
   async updateCategory(
     id: string,
     updateCategoryDto: UpdateForumCategoryDto,
   ): Promise<ForumCategoryResponseDto> {
     // Verify category exists
     const existingCategory = await this.prisma.forumCategory.findUnique({
-      where: { id },
+      where: { id: BigInt(id) },
     });
 
     if (!existingCategory) {
@@ -171,7 +174,7 @@ export class ForumCategoryService {
     }
 
     const updatedCategory = await this.prisma.forumCategory.update({
-      where: { id },
+      where: { id: BigInt(id) },
       data: {
         ...updateCategoryDto,
         updatedAt: new Date(),
@@ -181,11 +184,10 @@ export class ForumCategoryService {
 
     return this.transformCategoryToResponse(updatedCategory);
   }
-
   async deleteCategory(id: string): Promise<void> {
     // Verify category exists
     const category = await this.prisma.forumCategory.findUnique({
-      where: { id },
+      where: { id: BigInt(id) },
       include: {
         children: true,
         posts: true,
@@ -206,25 +208,23 @@ export class ForumCategoryService {
     }
 
     await this.prisma.forumCategory.delete({
-      where: { id },
+      where: { id: BigInt(id) },
     });
   }
-
   async reorderCategories(categoryOrders: { id: string; position: number }[]): Promise<void> {
     await this.prisma.$transaction(async prisma => {
       for (const { id, position } of categoryOrders) {
         await prisma.forumCategory.update({
-          where: { id },
+          where: { id: BigInt(id) },
           data: { position },
         });
       }
     });
   }
-
   async moveCategory(categoryId: string, newParentId?: string): Promise<ForumCategoryResponseDto> {
     // Verify category exists
     const category = await this.prisma.forumCategory.findUnique({
-      where: { id: categoryId },
+      where: { id: BigInt(categoryId) },
       include: { children: true },
     });
 
@@ -235,7 +235,7 @@ export class ForumCategoryService {
     // Verify new parent exists and check nesting level
     if (newParentId) {
       const newParent = await this.prisma.forumCategory.findUnique({
-        where: { id: newParentId },
+        where: { id: BigInt(newParentId) },
         include: { parent: true },
       });
 
@@ -246,17 +246,19 @@ export class ForumCategoryService {
       // Check if moving to a descendant (would create cycle)
       if (await this.isDescendant(categoryId, newParentId)) {
         throw new BadRequestException('Cannot move category to its own descendant');
-      }
-
-      // Check nesting level
+      } // Check nesting level
       let nestingLevel = 1;
-      let current = newParent;
-      while (current.parent) {
+      let currentParent = newParent.parent;
+      while (currentParent) {
         nestingLevel++;
-        current = current.parent;
         if (nestingLevel >= 3) {
           throw new BadRequestException('Maximum nesting level (3) exceeded');
         }
+        const nextParent = await this.prisma.forumCategory.findUnique({
+          where: { id: currentParent.id },
+          include: { parent: true },
+        });
+        currentParent = nextParent?.parent || null;
       }
 
       // Check if category has children and would exceed nesting
@@ -266,9 +268,9 @@ export class ForumCategoryService {
     }
 
     const updatedCategory = await this.prisma.forumCategory.update({
-      where: { id: categoryId },
+      where: { id: BigInt(categoryId) },
       data: {
-        parentId: newParentId,
+        parentId: newParentId ? BigInt(newParentId) : null,
         updatedAt: new Date(),
       },
       include: this.getCategoryIncludes(),
@@ -276,14 +278,13 @@ export class ForumCategoryService {
 
     return this.transformCategoryToResponse(updatedCategory);
   }
-
   async getCategoryStats(categoryId: string): Promise<{
     postCount: number;
     replyCount: number;
     lastActivity?: Date;
   }> {
     const category = await this.prisma.forumCategory.findUnique({
-      where: { id: categoryId },
+      where: { id: BigInt(categoryId) },
       include: {
         posts: {
           include: {
@@ -291,7 +292,7 @@ export class ForumCategoryService {
               select: { replies: true },
             },
           },
-          orderBy: { lastActivity: 'desc' },
+          orderBy: { updatedAt: 'desc' },
           take: 1,
         },
       },
@@ -304,25 +305,24 @@ export class ForumCategoryService {
     const replyCount = category.posts.reduce((total, post) => total + post._count.replies, 0);
 
     return {
-      postCount: category.postCount,
+      postCount: category.postsCount,
       replyCount,
-      lastActivity: category.lastActivity,
+      lastActivity: category.posts[0]?.updatedAt,
     };
   }
-
   async getCategoryBreadcrumbs(
     categoryId: string,
   ): Promise<{ id: string; name: string; slug: string }[]> {
     const breadcrumbs: { id: string; name: string; slug: string }[] = [];
 
     let currentCategory = await this.prisma.forumCategory.findUnique({
-      where: { id: categoryId },
+      where: { id: BigInt(categoryId) },
       include: { parent: true },
     });
 
     while (currentCategory) {
       breadcrumbs.unshift({
-        id: currentCategory.id,
+        id: currentCategory.id.toString(),
         name: currentCategory.name,
         slug: currentCategory.slug,
       });
@@ -351,23 +351,22 @@ export class ForumCategoryService {
       },
     };
   }
-
   private transformCategoryToResponse(category: any): ForumCategoryResponseDto {
     return {
-      id: category.id,
+      id: category.id.toString(),
       name: category.name,
       slug: category.slug,
       description: category.description,
       color: category.color,
       icon: category.icon,
       position: category.position,
-      postCount: category.postCount,
-      topicCount: category.topicCount,
-      lastActivity: category.lastActivity,
-      archived: category.archived,
-      moderated: category.moderated,
-      private: category.private,
-      parentId: category.parentId,
+      postCount: category.postsCount,
+      topicCount: category.topicsCount,
+      lastActivity: category.updatedAt, // Use updatedAt as lastActivity
+      archived: (category.flags & 8) !== 0, // archived bit is 8
+      moderated: (category.flags & 2) !== 0, // moderated bit is 2
+      private: (category.flags & 4) !== 0, // private bit is 4
+      parentId: category.parentId?.toString() || undefined,
       children:
         category.children?.map((child: any) => this.transformCategoryToResponse(child)) || [],
       createdAt: category.createdAt,
@@ -379,18 +378,17 @@ export class ForumCategoryService {
     const descendants = await this.getAllDescendants(categoryId);
     return descendants.some(descendant => descendant.id === potentialAncestorId);
   }
-
   private async getAllDescendants(categoryId: string): Promise<{ id: string }[]> {
     const descendants: { id: string }[] = [];
 
     const children = await this.prisma.forumCategory.findMany({
-      where: { parentId: categoryId },
+      where: { parentId: BigInt(categoryId) },
       select: { id: true },
     });
 
     for (const child of children) {
-      descendants.push(child);
-      const childDescendants = await this.getAllDescendants(child.id);
+      descendants.push({ id: child.id.toString() });
+      const childDescendants = await this.getAllDescendants(child.id.toString());
       descendants.push(...childDescendants);
     }
 

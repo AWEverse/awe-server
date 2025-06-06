@@ -7,22 +7,19 @@ import {
   Param,
   Delete,
   Query,
-  UseGuards,
   Request,
   ParseIntPipe,
 } from '@nestjs/common';
+import { ApiTags, ApiOperation, ApiResponse, ApiParam, ApiQuery } from '@nestjs/swagger';
 import {
-  ApiTags,
-  ApiOperation,
-  ApiResponse,
-  ApiBearerAuth,
-  ApiParam,
-  ApiQuery,
-} from '@nestjs/swagger';
+  BaseForumController,
+  AuthenticatedEndpoint,
+  OptionalAuthEndpoint,
+  StandardErrorResponses,
+  PaginatedResponse,
+} from './base-forum.controller';
 import { ForumService } from '../services/forum.service';
 import { ForumReplyService } from '../services/forum-reply.service';
-import { JwtAuthGuard } from '../../auth/guards/jwt-auth.guard';
-import { OptionalAuthGuard } from '../../auth/guards/optional-auth.guard';
 import {
   CreateForumPostDto,
   UpdateForumPostDto,
@@ -38,33 +35,31 @@ import {
 
 @ApiTags('Forum')
 @Controller('forum')
-export class ForumController {
+export class ForumController extends BaseForumController {
   constructor(
     private readonly forumService: ForumService,
     private readonly forumReplyService: ForumReplyService,
-  ) {}
-
+  ) {
+    super();
+  }
   // Posts endpoints
   @Post('posts')
-  @UseGuards(JwtAuthGuard)
-  @ApiBearerAuth()
+  @AuthenticatedEndpoint()
   @ApiOperation({ summary: 'Create a new forum post' })
   @ApiResponse({
     status: 201,
     description: 'Post created successfully',
     type: ForumPostResponseDto,
   })
-  @ApiResponse({ status: 401, description: 'Unauthorized' })
-  @ApiResponse({ status: 404, description: 'Category not found' })
+  @StandardErrorResponses()
   async createPost(
     @Request() req: any,
     @Body() createPostDto: CreateForumPostDto,
   ): Promise<ForumPostResponseDto> {
-    return this.forumService.createPost(req.user.id, createPostDto);
+    return this.forumService.createPost(this.getUserId(req), createPostDto);
   }
-
   @Get('posts')
-  @UseGuards(OptionalAuthGuard)
+  @OptionalAuthEndpoint()
   @ApiOperation({ summary: 'Get forum posts with filtering and pagination' })
   @ApiResponse({
     status: 200,
@@ -104,11 +99,10 @@ export class ForumController {
     @Request() req: any,
     @Query() query: ForumPostQueryDto,
   ): Promise<PaginatedForumPostsDto> {
-    return this.forumService.findPosts(query, req.user?.id);
+    return this.forumService.findPosts(query, this.getOptionalUserId(req));
   }
-
   @Get('posts/:id')
-  @UseGuards(OptionalAuthGuard)
+  @OptionalAuthEndpoint()
   @ApiOperation({ summary: 'Get a forum post by ID' })
   @ApiParam({ name: 'id', description: 'Post ID' })
   @ApiResponse({
@@ -118,12 +112,11 @@ export class ForumController {
   })
   @ApiResponse({ status: 404, description: 'Post not found' })
   async findPostById(@Request() req: any, @Param('id') id: string): Promise<ForumPostResponseDto> {
-    return this.forumService.findPostById(id, req.user?.id);
+    return this.forumService.findPostById(id, this.getOptionalUserId(req));
   }
 
   @Patch('posts/:id')
-  @UseGuards(JwtAuthGuard)
-  @ApiBearerAuth()
+  @AuthenticatedEndpoint()
   @ApiOperation({ summary: 'Update a forum post' })
   @ApiParam({ name: 'id', description: 'Post ID' })
   @ApiResponse({
@@ -131,7 +124,6 @@ export class ForumController {
     description: 'Post updated successfully',
     type: ForumPostResponseDto,
   })
-  @ApiResponse({ status: 401, description: 'Unauthorized' })
   @ApiResponse({ status: 403, description: 'Forbidden - not post author' })
   @ApiResponse({ status: 404, description: 'Post not found' })
   async updatePost(
@@ -139,26 +131,23 @@ export class ForumController {
     @Param('id') id: string,
     @Body() updatePostDto: UpdateForumPostDto,
   ): Promise<ForumPostResponseDto> {
-    return this.forumService.updatePost(id, req.user.id, updatePostDto);
+    return this.forumService.updatePost(id, this.getUserId(req), updatePostDto);
   }
 
   @Delete('posts/:id')
-  @UseGuards(JwtAuthGuard)
-  @ApiBearerAuth()
+  @AuthenticatedEndpoint()
   @ApiOperation({ summary: 'Delete a forum post' })
   @ApiParam({ name: 'id', description: 'Post ID' })
   @ApiResponse({ status: 200, description: 'Post deleted successfully' })
-  @ApiResponse({ status: 401, description: 'Unauthorized' })
   @ApiResponse({ status: 403, description: 'Forbidden - not post author' })
   @ApiResponse({ status: 404, description: 'Post not found' })
   async deletePost(@Request() req: any, @Param('id') id: string): Promise<{ message: string }> {
-    await this.forumService.deletePost(id, req.user.id);
+    await this.forumService.deletePost(id, this.getUserId(req));
     return { message: 'Post deleted successfully' };
   }
 
   @Post('posts/:id/vote')
-  @UseGuards(JwtAuthGuard)
-  @ApiBearerAuth()
+  @AuthenticatedEndpoint()
   @ApiOperation({ summary: 'Vote on a forum post' })
   @ApiParam({ name: 'id', description: 'Post ID' })
   @ApiResponse({
@@ -172,20 +161,17 @@ export class ForumController {
       },
     },
   })
-  @ApiResponse({ status: 401, description: 'Unauthorized' })
   @ApiResponse({ status: 404, description: 'Post not found' })
   async votePost(
     @Request() req: any,
     @Param('id') id: string,
     @Body() voteDto: ForumVoteDto,
   ): Promise<{ success: boolean; netVotes: number }> {
-    return this.forumService.votePost(id, req.user.id, voteDto.value);
+    return this.forumService.votePost(id, this.getUserId(req), voteDto.value);
   }
-
   // Replies endpoints
   @Post('posts/:postId/replies')
-  @UseGuards(JwtAuthGuard)
-  @ApiBearerAuth()
+  @AuthenticatedEndpoint()
   @ApiOperation({ summary: 'Create a reply to a forum post' })
   @ApiParam({ name: 'postId', description: 'Post ID' })
   @ApiResponse({
@@ -193,18 +179,17 @@ export class ForumController {
     description: 'Reply created successfully',
     type: ForumReplyResponseDto,
   })
-  @ApiResponse({ status: 401, description: 'Unauthorized' })
   @ApiResponse({ status: 404, description: 'Post not found' })
   async createReply(
     @Request() req: any,
     @Param('postId') postId: string,
     @Body() createReplyDto: CreateForumReplyDto,
   ): Promise<ForumReplyResponseDto> {
-    return this.forumReplyService.createReply(postId, req.user.id, createReplyDto);
+    return this.forumReplyService.createReply(postId, this.getUserId(req), createReplyDto);
   }
 
   @Get('posts/:postId/replies')
-  @UseGuards(OptionalAuthGuard)
+  @OptionalAuthEndpoint()
   @ApiOperation({ summary: 'Get replies for a forum post' })
   @ApiParam({ name: 'postId', description: 'Post ID' })
   @ApiResponse({
@@ -217,11 +202,11 @@ export class ForumController {
     @Request() req: any,
     @Param('postId') postId: string,
   ): Promise<ForumReplyResponseDto[]> {
-    return this.forumReplyService.findRepliesByPost(postId, req.user?.id);
+    return this.forumReplyService.findRepliesByPost(postId, this.getOptionalUserId(req));
   }
 
   @Get('replies/:id')
-  @UseGuards(OptionalAuthGuard)
+  @OptionalAuthEndpoint()
   @ApiOperation({ summary: 'Get a reply by ID' })
   @ApiParam({ name: 'id', description: 'Reply ID' })
   @ApiResponse({
@@ -234,12 +219,11 @@ export class ForumController {
     @Request() req: any,
     @Param('id') id: string,
   ): Promise<ForumReplyResponseDto> {
-    return this.forumReplyService.findReplyById(id, req.user?.id);
+    return this.forumReplyService.findReplyById(id, this.getOptionalUserId(req));
   }
 
   @Patch('replies/:id')
-  @UseGuards(JwtAuthGuard)
-  @ApiBearerAuth()
+  @AuthenticatedEndpoint()
   @ApiOperation({ summary: 'Update a reply' })
   @ApiParam({ name: 'id', description: 'Reply ID' })
   @ApiResponse({
@@ -247,7 +231,6 @@ export class ForumController {
     description: 'Reply updated successfully',
     type: ForumReplyResponseDto,
   })
-  @ApiResponse({ status: 401, description: 'Unauthorized' })
   @ApiResponse({ status: 403, description: 'Forbidden - not reply author' })
   @ApiResponse({ status: 404, description: 'Reply not found' })
   async updateReply(
@@ -255,26 +238,23 @@ export class ForumController {
     @Param('id') id: string,
     @Body() updateReplyDto: UpdateForumReplyDto,
   ): Promise<ForumReplyResponseDto> {
-    return this.forumReplyService.updateReply(id, req.user.id, updateReplyDto);
+    return this.forumReplyService.updateReply(id, this.getUserId(req), updateReplyDto);
   }
 
   @Delete('replies/:id')
-  @UseGuards(JwtAuthGuard)
-  @ApiBearerAuth()
+  @AuthenticatedEndpoint()
   @ApiOperation({ summary: 'Delete a reply' })
   @ApiParam({ name: 'id', description: 'Reply ID' })
   @ApiResponse({ status: 200, description: 'Reply deleted successfully' })
-  @ApiResponse({ status: 401, description: 'Unauthorized' })
   @ApiResponse({ status: 403, description: 'Forbidden - not reply author' })
   @ApiResponse({ status: 404, description: 'Reply not found' })
   async deleteReply(@Request() req: any, @Param('id') id: string): Promise<{ message: string }> {
-    await this.forumReplyService.deleteReply(id, req.user.id);
+    await this.forumReplyService.deleteReply(id, this.getUserId(req));
     return { message: 'Reply deleted successfully' };
   }
 
   @Post('replies/:id/vote')
-  @UseGuards(JwtAuthGuard)
-  @ApiBearerAuth()
+  @AuthenticatedEndpoint()
   @ApiOperation({ summary: 'Vote on a reply' })
   @ApiParam({ name: 'id', description: 'Reply ID' })
   @ApiResponse({
@@ -288,19 +268,17 @@ export class ForumController {
       },
     },
   })
-  @ApiResponse({ status: 401, description: 'Unauthorized' })
   @ApiResponse({ status: 404, description: 'Reply not found' })
   async voteReply(
     @Request() req: any,
     @Param('id') id: string,
     @Body() voteDto: ForumVoteDto,
   ): Promise<{ success: boolean; netVotes: number }> {
-    return this.forumReplyService.voteReply(id, req.user.id, voteDto.value);
+    return this.forumReplyService.voteReply(id, this.getUserId(req), voteDto.value);
   }
 
   @Post('replies/:id/mark-solution')
-  @UseGuards(JwtAuthGuard)
-  @ApiBearerAuth()
+  @AuthenticatedEndpoint()
   @ApiOperation({ summary: 'Mark a reply as solution' })
   @ApiParam({ name: 'id', description: 'Reply ID' })
   @ApiResponse({
@@ -308,14 +286,13 @@ export class ForumController {
     description: 'Reply marked as solution successfully',
     type: ForumReplyResponseDto,
   })
-  @ApiResponse({ status: 401, description: 'Unauthorized' })
   @ApiResponse({ status: 403, description: 'Forbidden - not post author' })
   @ApiResponse({ status: 404, description: 'Reply not found' })
   async markReplyAsSolution(
     @Request() req: any,
     @Param('id') id: string,
   ): Promise<ForumReplyResponseDto> {
-    return this.forumReplyService.markAsSolution(id, req.user.id);
+    return this.forumReplyService.markAsSolution(id, this.getUserId(req));
   }
 
   // Stats endpoint
