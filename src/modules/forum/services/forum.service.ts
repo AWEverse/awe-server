@@ -13,7 +13,7 @@ import {
   PaginatedForumPostsDto,
   ForumStatsDto,
 } from '../dto/forum.dto';
-import { Prisma } from '@prisma/client';
+import { Prisma } from 'generated/client';
 
 @Injectable()
 export class ForumService {

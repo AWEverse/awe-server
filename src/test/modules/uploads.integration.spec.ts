@@ -1,7 +1,7 @@
 import { Test, TestingModule } from '@nestjs/testing';
 import { INestApplication } from '@nestjs/common';
 import { faker } from '@faker-js/faker';
-import { User } from '@prisma/client';
+import { User } from 'generated/client';
 
 // Test Setup and Utilities
 import { createTestApp, createTestUser, cleanupDatabase } from '../setup/database-setup';

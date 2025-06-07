@@ -16,6 +16,7 @@
 generator client {
   provider        = "prisma-client-js"
   previewFeatures = ["fullTextSearchPostgres", "postgresqlExtensions"]
+  output          = "../generated/client"
 }
 
 datasource db {
@@ -146,6 +147,7 @@ enum ModerationAction {
 
   WARN
   PIN
+  UNPIN
   FEATURE
   UNFEATURE
   LOCK

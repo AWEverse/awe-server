@@ -272,7 +272,6 @@ export class ForumModerationService {
           let targetContent: any = undefined;
           let targetId: string | undefined = undefined;
           let targetType: 'POST' | 'REPLY' | undefined = undefined;
-
           if (log.postId) {
             targetId = log.postId.toString();
             targetType = 'POST';
@@ -292,6 +291,7 @@ export class ForumModerationService {
             targetContent,
             notes:
               typeof log.metadata === 'object' &&
+              log.metadata !== null &&
               log.metadata !== undefined &&
               'notes' in log.metadata
                 ? (log.metadata as any).notes

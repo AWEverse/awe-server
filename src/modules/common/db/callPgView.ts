@@ -1,4 +1,4 @@
-import { PrismaClient } from '@prisma/client';
+import { PrismaClient } from 'generated/client';
 
 export async function callPgViewAdaptive<T = any>(
   prisma: PrismaClient,
@@ -15,7 +15,7 @@ export async function callPgViewAdaptive<T = any>(
   let lastError: Error | null = null;
   for (let attempt = 1; attempt <= maxRetries; attempt++) {
     try {
-      return await prisma.$queryRawUnsafe<T[]>(sql);
+      return (await prisma.$queryRawUnsafe(sql)) as T[];
     } catch (error) {
       lastError = error as Error;
 

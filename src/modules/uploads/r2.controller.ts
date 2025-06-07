@@ -17,7 +17,7 @@ import { FileInterceptor, FilesInterceptor, AnyFilesInterceptor } from '@nestjs/
 import { ApiTags, ApiOperation, ApiResponse, ApiConsumes, ApiBody } from '@nestjs/swagger';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { GetUser } from '../common/decorators/get-user.decorator';
-import { User } from '@prisma/client';
+import { User } from 'generated/client';
 import {
   R2StorageService,
   R2BatchService,

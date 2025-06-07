@@ -7,7 +7,7 @@ import { ProfileService } from '../../src/modules/users/profile/profile.service'
 import { SettingsService } from '../../src/modules/users/settings/settings.service';
 import { CryptoService } from '../../src/modules/users/crypto/crypto.service';
 import { UsersModule } from '../../src/modules/users/users.module';
-import { User, UserSettings, UserCrypto } from '@prisma/client';
+import { User, UserSettings, UserCrypto } from 'generated/client';
 
 describe('Users Integration Tests', () => {
   let app: INestApplication;
@@ -95,9 +95,7 @@ describe('Users Integration Tests', () => {
 
       it('should throw NotFoundException for non-existent user', async () => {
         // Act & Assert
-        await expect(
-          profileService.getProfile('999999')
-        ).rejects.toThrow('User not found');
+        await expect(profileService.getProfile('999999')).rejects.toThrow('User not found');
       });
 
       it('should handle BigInt fields correctly', async () => {
@@ -145,7 +143,7 @@ describe('Users Integration Tests', () => {
         // Act
         const updatedProfile = await profileService.updateProfile(
           testUser.id.toString(),
-          updateData
+          updateData,
         );
 
         // Assert
@@ -174,7 +172,7 @@ describe('Users Integration Tests', () => {
         // Act
         const updatedProfile = await profileService.updateProfile(
           testUser.id.toString(),
-          updateData
+          updateData,
         );
 
         // Assert
@@ -188,7 +186,7 @@ describe('Users Integration Tests', () => {
         await expect(
           profileService.updateProfile(testUser.id.toString(), {
             color: 'invalid-color',
-          })
+          }),
         ).rejects.toThrow();
       });
 
@@ -197,7 +195,7 @@ describe('Users Integration Tests', () => {
         await expect(
           profileService.updateProfile(testUser.id.toString(), {
             timezone: 'Invalid/Timezone',
-          })
+          }),
         ).rejects.toThrow();
       });
     });
@@ -387,7 +385,7 @@ describe('Users Integration Tests', () => {
         // Act
         const updatedSettings = await settingsService.updateSettings(
           testUser.id.toString(),
-          updateData
+          updateData,
         );
 
         // Assert
@@ -417,7 +415,7 @@ describe('Users Integration Tests', () => {
         // Act
         const updatedSettings = await settingsService.updateSettings(
           testUser.id.toString(),
-          updateData
+          updateData,
         );
 
         // Assert
@@ -431,7 +429,7 @@ describe('Users Integration Tests', () => {
         await expect(
           settingsService.updateSettings('999999', {
             notificationsEnabled: false,
-          })
+          }),
         ).rejects.toThrow('User not found');
       });
 
@@ -440,7 +438,7 @@ describe('Users Integration Tests', () => {
         await expect(
           settingsService.updateSettings(testUser.id.toString(), {
             privacyLevel: 'INVALID' as any,
-          })
+          }),
         ).rejects.toThrow();
       });
     });
@@ -527,10 +525,7 @@ describe('Users Integration Tests', () => {
         };
 
         // Act
-        const result = await cryptoService.createIdentityKey(
-          testUser.id,
-          createKeysDto
-        );
+        const result = await cryptoService.createIdentityKey(testUser.id, createKeysDto);
 
         // Assert
         expect(result.success).toBe(true);
@@ -559,9 +554,9 @@ describe('Users Integration Tests', () => {
         };
 
         // Act & Assert
-        await expect(
-          cryptoService.createIdentityKey(testUser.id, createKeysDto)
-        ).rejects.toThrow('Identity key already exists for this user');
+        await expect(cryptoService.createIdentityKey(testUser.id, createKeysDto)).rejects.toThrow(
+          'Identity key already exists for this user',
+        );
       });
 
       it('should validate key format', async () => {
@@ -571,9 +566,9 @@ describe('Users Integration Tests', () => {
         };
 
         // Act & Assert
-        await expect(
-          cryptoService.createIdentityKey(testUser.id, createKeysDto)
-        ).rejects.toThrow('Invalid identity key format');
+        await expect(cryptoService.createIdentityKey(testUser.id, createKeysDto)).rejects.toThrow(
+          'Invalid identity key format',
+        );
       });
     });
 
@@ -628,9 +623,7 @@ describe('Users Integration Tests', () => {
       it('should handle duplicate key IDs', async () => {
         // Arrange - Upload initial keys
         await cryptoService.uploadPreKeys(testUser.id, {
-          preKeys: [
-            { keyId: 1, publicKey: 'BQGhXJBOdKLVZj8Qjgmc2YZ8SLI5cABP0rQIZiHnL/mK1' },
-          ],
+          preKeys: [{ keyId: 1, publicKey: 'BQGhXJBOdKLVZj8Qjgmc2YZ8SLI5cABP0rQIZiHnL/mK1' }],
           signedPreKey: {
             keyId: 1,
             publicKey: 'BQGhXJBOdKLVZj8Qjgmc2YZ8SLI5cABP0rQIZiHnL/mKS',
@@ -650,9 +643,7 @@ describe('Users Integration Tests', () => {
         };
 
         // Act & Assert
-        await expect(
-          cryptoService.uploadPreKeys(testUser.id, uploadDto)
-        ).rejects.toThrow();
+        await expect(cryptoService.uploadPreKeys(testUser.id, uploadDto)).rejects.toThrow();
       });
 
       it('should throw NotFoundException for non-existent user crypto', async () => {
@@ -668,9 +659,7 @@ describe('Users Integration Tests', () => {
         });
 
         const uploadDto = {
-          preKeys: [
-            { keyId: 1, publicKey: 'BQGhXJBOdKLVZj8Qjgmc2YZ8SLI5cABP0rQIZiHnL/mK1' },
-          ],
+          preKeys: [{ keyId: 1, publicKey: 'BQGhXJBOdKLVZj8Qjgmc2YZ8SLI5cABP0rQIZiHnL/mK1' }],
           signedPreKey: {
             keyId: 1,
             publicKey: 'BQGhXJBOdKLVZj8Qjgmc2YZ8SLI5cABP0rQIZiHnL/mKS',
@@ -679,9 +668,9 @@ describe('Users Integration Tests', () => {
         };
 
         // Act & Assert
-        await expect(
-          cryptoService.uploadPreKeys(newUser.id, uploadDto)
-        ).rejects.toThrow('User crypto not found');
+        await expect(cryptoService.uploadPreKeys(newUser.id, uploadDto)).rejects.toThrow(
+          'User crypto not found',
+        );
       });
     });
 
@@ -724,7 +713,9 @@ describe('Users Integration Tests', () => {
         expect(keyBundle.identityKey).toBe('BQGhXJBOdKLVZj8Qjgmc2YZ8SLI5cABP0rQIZiHnL/mK');
         expect(keyBundle.signedPreKey).toBeDefined();
         expect(keyBundle.signedPreKey.keyId).toBe(1);
-        expect(keyBundle.signedPreKey.publicKey).toBe('BQGhXJBOdKLVZj8Qjgmc2YZ8SLI5cABP0rQIZiHnL/mKS');
+        expect(keyBundle.signedPreKey.publicKey).toBe(
+          'BQGhXJBOdKLVZj8Qjgmc2YZ8SLI5cABP0rQIZiHnL/mKS',
+        );
         expect(keyBundle.signedPreKey.signature).toBe('signature-data');
         expect(keyBundle.preKey).toBeDefined();
         expect([1, 2]).toContain(keyBundle.preKey.keyId);
@@ -741,9 +732,9 @@ describe('Users Integration Tests', () => {
 
       it('should throw NotFoundException for non-existent user', async () => {
         // Act & Assert
-        await expect(
-          cryptoService.getKeyBundle({ userId: BigInt('999999') })
-        ).rejects.toThrow('User crypto not found');
+        await expect(cryptoService.getKeyBundle({ userId: BigInt('999999') })).rejects.toThrow(
+          'User crypto not found',
+        );
       });
 
       it('should handle no available prekeys', async () => {
@@ -754,9 +745,9 @@ describe('Users Integration Tests', () => {
         });
 
         // Act & Assert
-        await expect(
-          cryptoService.getKeyBundle({ userId: testUser.id })
-        ).rejects.toThrow('No prekeys available');
+        await expect(cryptoService.getKeyBundle({ userId: testUser.id })).rejects.toThrow(
+          'No prekeys available',
+        );
       });
     });
 
@@ -832,9 +823,7 @@ describe('Users Integration Tests', () => {
         };
 
         // Act & Assert
-        await expect(
-          cryptoService.rotateSignedPreKey(testUser.id, rotateDto)
-        ).rejects.toThrow();
+        await expect(cryptoService.rotateSignedPreKey(testUser.id, rotateDto)).rejects.toThrow();
       });
     });
 
@@ -909,9 +898,9 @@ describe('Users Integration Tests', () => {
         });
 
         // Act & Assert
-        await expect(
-          cryptoService.getKeyStatus(newUser.id)
-        ).rejects.toThrow('User crypto not found');
+        await expect(cryptoService.getKeyStatus(newUser.id)).rejects.toThrow(
+          'User crypto not found',
+        );
       });
     });
   });
@@ -933,7 +922,7 @@ describe('Users Integration Tests', () => {
       const promises = Array.from({ length: 5 }, (_, i) =>
         profileService.updateProfile(user.id.toString(), {
           bio: `Updated bio ${i}`,
-        })
+        }),
       );
 
       // Assert - All updates should complete without errors
@@ -1006,7 +995,7 @@ describe('Users Integration Tests', () => {
 
       // Act & Assert - Simulate transaction failure
       try {
-        await prisma.$transaction(async (tx) => {
+        await prisma.$transaction(async tx => {
           await tx.user.update({
             where: { id: user.id },
             data: { fullName: 'Transaction Name' },
@@ -1050,7 +1039,7 @@ describe('Users Integration Tests', () => {
             username: `bulkuser${i}`,
             roleId: BigInt('1'),
           },
-        })
+        }),
       );
 
       await Promise.all(userPromises);
@@ -1070,7 +1059,7 @@ describe('Users Integration Tests', () => {
       // Act - Measure bulk settings creation
       const settingsStartTime = Date.now();
       const settingsPromises = searchResults.users.map(user =>
-        settingsService.getSettings(user.id)
+        settingsService.getSettings(user.id),
       );
       await Promise.all(settingsPromises);
       const settingsEndTime = Date.now();

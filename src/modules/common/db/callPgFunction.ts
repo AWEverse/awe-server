@@ -1,4 +1,4 @@
-import { PrismaClient } from '@prisma/client';
+import { PrismaClient } from 'generated/client';
 import { PgFunctionCallOptions } from './types';
 
 export async function callPgFunctionAdaptive<T = any>(
@@ -48,10 +48,9 @@ export async function callPgFunctionAdaptive<T = any>(
   const sql = `SELECT * FROM ${schemaQualifiedName}(${placeholders})`;
 
   let lastError: Error | null = null;
-
   for (let attempt = 1; attempt <= maxRetries; attempt++) {
     try {
-      return await prisma.$queryRawUnsafe<T[]>(sql, ...sanitizedArgs);
+      return (await prisma.$queryRawUnsafe(sql, ...sanitizedArgs)) as T[];
     } catch (error) {
       lastError = error as Error;
 

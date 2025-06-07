@@ -1,5 +1,5 @@
 // Test database setup utilities
-import { PrismaClient } from '@prisma/client';
+import { PrismaClient } from 'generated/client';
 import { randomBytes } from 'crypto';
 
 export class DatabaseTestSetup {

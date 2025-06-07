@@ -6,7 +6,7 @@ import { DatabaseTestSetup } from '../setup/database-setup';
 import { MessangerService } from '../../src/modules/messanger/messanger.service';
 import { MessangerRepository } from '../../src/modules/messanger/messanger.repository';
 import { MessangerModule } from '../../src/modules/messanger/messanger.module';
-import { User, Chat, Message, ChatParticipant } from '@prisma/client';
+import { User, Chat, Message, ChatParticipant } from 'generated/client';
 import { ChatType, MessageType, ChatRole } from '../../src/modules/messanger/types';
 import { DatabaseOptimizer } from 'src/modules/messanger/optimizations/database-optimization';
 

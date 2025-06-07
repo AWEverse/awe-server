@@ -2,7 +2,7 @@ import { Controller, Post, Get, Body, Param, Query, UseGuards, Logger } from '@n
 import { ApiTags, ApiOperation, ApiProperty } from '@nestjs/swagger';
 import { IsString, IsEnum, IsOptional, IsObject } from 'class-validator';
 
-import { User } from '@prisma/client';
+import { User } from 'generated/client';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { GetUser } from '../common/decorators/get-user.decorator';
 import { MediaProcessingService } from './services/media-processing.service';
