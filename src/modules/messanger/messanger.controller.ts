@@ -27,6 +27,7 @@ import {
   CheckPermissionsDto,
   ArchiveMessagesDto,
 } from './dto/chat.dto';
+import { SendStickerDto, SendGifDto, SendCustomEmojiDto } from './dto/realtime.dto';
 import { ChatType, MessageType, ChatRole } from './types';
 import {
   ApiTags,
@@ -757,6 +758,154 @@ export class MessangerController {
       );
     } catch (error) {
       this.logger.error(`Error archiving messages in chat ${chatId}`, error.stack);
+      throw error;
+    }
+  }
+
+  // ===============================================
+  // СТикеры, GIF, Эмодзи
+  // ===============================================
+
+  // Стикеры endpoints
+  @Post('chats/:chatId/stickers')
+  @ApiOperation({
+    summary: 'Send sticker in chat',
+    description: 'Send a sticker message in the specified chat',
+  })
+  @ApiResponse({ status: 201, description: 'Sticker sent successfully' })
+  @ApiResponse({ status: 400, description: 'Invalid sticker data' })
+  @ApiResponse({ status: 403, description: 'Access denied or premium required' })
+  async sendSticker(
+    @Param('chatId') chatId: string,
+    @Body(ValidationPipe) sendStickerDto: SendStickerDto,
+    @Request() req: UserRequest,
+  ) {
+    try {
+      const userId = this.getUserIdFromRequest(req);
+      this.logger.log(`Sending sticker in chat ${chatId} by user ${userId}`);
+
+      return await this.messengerService.sendSticker(
+        BigInt(chatId),
+        userId,
+        BigInt(sendStickerDto.stickerId),
+      );
+    } catch (error) {
+      this.logger.error(`Error sending sticker in chat ${chatId}`, error.stack);
+      throw error;
+    }
+  }
+
+  @Post('chats/:chatId/gifs')
+  @ApiOperation({
+    summary: 'Send GIF in chat',
+    description: 'Send a GIF message in the specified chat',
+  })
+  @ApiResponse({ status: 201, description: 'GIF sent successfully' })
+  @ApiResponse({ status: 400, description: 'Invalid GIF data' })
+  async sendGif(
+    @Param('chatId') chatId: string,
+    @Body(ValidationPipe) sendGifDto: SendGifDto,
+    @Request() req: UserRequest,
+  ) {
+    try {
+      const userId = this.getUserIdFromRequest(req);
+      this.logger.log(`Sending GIF in chat ${chatId} by user ${userId}`);
+
+      return await this.messengerService.sendGif(BigInt(chatId), userId, BigInt(sendGifDto.gifId));
+    } catch (error) {
+      this.logger.error(`Error sending GIF in chat ${chatId}`, error.stack);
+      throw error;
+    }
+  }
+
+  @Post('chats/:chatId/custom-emojis')
+  @ApiOperation({
+    summary: 'Send custom emoji in chat',
+    description: 'Send a custom emoji message in the specified chat',
+  })
+  @ApiResponse({ status: 201, description: 'Custom emoji sent successfully' })
+  @ApiResponse({ status: 400, description: 'Invalid emoji data' })
+  async sendCustomEmoji(
+    @Param('chatId') chatId: string,
+    @Body(ValidationPipe) sendCustomEmojiDto: SendCustomEmojiDto,
+    @Request() req: UserRequest,
+  ) {
+    try {
+      const userId = this.getUserIdFromRequest(req);
+      this.logger.log(`Sending custom emoji in chat ${chatId} by user ${userId}`);
+
+      return await this.messengerService.sendCustomEmoji(
+        BigInt(chatId),
+        userId,
+        BigInt(sendCustomEmojiDto.customEmojiId),
+      );
+    } catch (error) {
+      this.logger.error(`Error sending custom emoji in chat ${chatId}`, error.stack);
+      throw error;
+    }
+  }
+
+  @Get('sticker-packs')
+  @ApiOperation({
+    summary: 'Get user sticker packs',
+    description: 'Get all sticker packs available to the user',
+  })
+  @ApiResponse({ status: 200, description: 'Sticker packs retrieved successfully' })
+  async getUserStickerPacks(@Request() req: UserRequest) {
+    try {
+      const userId = this.getUserIdFromRequest(req);
+      this.logger.log(`Getting sticker packs for user ${userId}`);
+
+      return await this.messengerService.getUserStickerPacks(userId);
+    } catch (error) {
+      this.logger.error(`Error getting sticker packs for user`, error.stack);
+      throw error;
+    }
+  }
+
+  @Get('gifs/trending')
+  @ApiOperation({
+    summary: 'Get trending GIFs',
+    description: 'Get trending GIFs for chat usage',
+  })
+  @ApiQuery({
+    name: 'limit',
+    required: false,
+    type: Number,
+    description: 'Number of GIFs to return',
+  })
+  @ApiResponse({ status: 200, description: 'Trending GIFs retrieved successfully' })
+  async getTrendingGifs(@Query('limit') limit?: number) {
+    try {
+      this.logger.log(`Getting trending GIFs with limit ${limit || 20}`);
+
+      return await this.messengerService.getTrendingGifs(limit || 20);
+    } catch (error) {
+      this.logger.error('Error getting trending GIFs', error.stack);
+      throw error;
+    }
+  }
+
+  @Get('gifs/search')
+  @ApiOperation({
+    summary: 'Search GIFs',
+    description: 'Search for GIFs by query',
+  })
+  @ApiQuery({ name: 'q', required: true, type: String, description: 'Search query' })
+  @ApiQuery({
+    name: 'limit',
+    required: false,
+    type: Number,
+    description: 'Number of GIFs to return',
+  })
+  @ApiResponse({ status: 200, description: 'GIFs found successfully' })
+  async searchGifs(@Query('q') query: string, @Query('limit') limit?: number) {
+    try {
+      this.logger.log(`Searching GIFs for query: ${query}`);
+
+      return await this.messengerService.searchGifs(query, limit || 20);
+    } catch (error) {
+      this.logger.error(`Error searching GIFs for query: ${query}`, error.stack);
       throw error;
     }
   }

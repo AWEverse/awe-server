@@ -27,6 +27,12 @@ export interface MessageInfo {
   forwardedFrom?: MessageInfo;
   attachments?: MessageAttachment[];
   reactions?: MessageReaction[];
+  /** Стикеры в сообщении */
+  stickers?: MessageSticker[];
+  /** GIF в сообщении */
+  gifs?: MessageGif[];
+  /** Кастомные эмоджи в сообщении */
+  customEmojis?: MessageEmoji[];
   /** Количество реакций (оптимизация для фронта) */
   reactionCount?: number;
   /** Количество вложений (оптимизация для фронта) */
@@ -39,7 +45,9 @@ export interface MessageInfo {
  * Пагинированный список сообщений (cursor-based)
  */
 export interface PaginatedMessages {
-  messages: MessageInfo[];
+  messagesGroups: {
+    [key: string]: MessageInfo[]; // Ключ - дата в формате YYYY-MM-DD, значение - массив сообщений
+  };
   hasMore: boolean;
   nextCursor?: string;
   /** Общее количество сообщений (опционально, для фронта) */

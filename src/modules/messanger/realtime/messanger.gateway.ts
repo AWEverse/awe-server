@@ -21,6 +21,9 @@ import {
   OnlineStatusDto,
   JoinChatDto,
   LeaveChatDto,
+  SendStickerDto,
+  SendGifDto,
+  SendCustomEmojiDto,
 } from '../dto/realtime.dto';
 import { MessageType, ChatType } from '../types';
 import { PrismaService } from '../../../libs/supabase/db/prisma.service';
@@ -148,11 +151,18 @@ export class MessangerGateway implements OnGatewayInit, OnGatewayConnection, OnG
       const { chatId, content, messageType = MessageType.TEXT, replyToId, threadId } = data;
 
       // Verify user has access to chat
-      await this.verifyUserChatAccess(client.userId, BigInt(chatId)); // Send message through service
+      await this.verifyUserChatAccess(client.userId, BigInt(chatId));
+
+      // Content is required for regular messages
+      if (!content && !data.stickerId && !data.gifId && !data.customEmojiId) {
+        throw new Error('Message content or media is required');
+      }
+
+      // Send message through service
       const result = await this.messengerService.sendMessage(
         BigInt(chatId),
         client.userId,
-        content,
+        content || '',
         messageType,
         {
           replyToId: replyToId ? BigInt(replyToId) : undefined,
@@ -455,6 +465,166 @@ export class MessangerGateway implements OnGatewayInit, OnGatewayConnection, OnG
       return result;
     } catch (error) {
       this.logger.error('Error removing reaction:', error);
+      throw new WsException(error.message);
+    }
+  }
+
+  // ===============================================
+  // СТИКЕРЫ И МЕДИА
+  // ===============================================
+
+  @SubscribeMessage('send_sticker')
+  @UseGuards(WsJwtGuard)
+  @UsePipes(new ValidationPipe())
+  async handleSendSticker(
+    @ConnectedSocket() client: AuthenticatedSocket,
+    @MessageBody() data: SendStickerDto,
+  ) {
+    try {
+      const { chatId, stickerId, replyToId, threadId } = data;
+
+      // Verify user has access to chat
+      await this.verifyUserChatAccess(client.userId, BigInt(chatId));
+
+      // Send sticker through service
+      const result = await this.messengerService.sendSticker(
+        BigInt(chatId),
+        client.userId,
+        BigInt(stickerId),
+        {
+          replyToId: replyToId ? BigInt(replyToId) : undefined,
+          threadId: threadId ? BigInt(threadId) : undefined,
+        },
+      );
+
+      // Broadcast sticker to all chat participants
+      await this.broadcastToChatRoom(chatId, 'new_message', {
+        ...result,
+        chatId: chatId,
+        messageType: 'STICKER',
+      });
+
+      // Send delivery confirmation to sender
+      client.emit('message_sent', {
+        tempId: data.tempId,
+        messageId: result.id,
+        timestamp: result.createdAt,
+      });
+
+      // Update chat's last message timestamp
+      await this.updateChatLastActivity(BigInt(chatId));
+
+      return { success: true, data: result };
+    } catch (error) {
+      this.logger.error('Error sending sticker:', error);
+      client.emit('message_error', {
+        tempId: data.tempId,
+        error: error.message,
+      });
+      throw new WsException(error.message);
+    }
+  }
+
+  @SubscribeMessage('send_gif')
+  @UseGuards(WsJwtGuard)
+  @UsePipes(new ValidationPipe())
+  async handleSendGif(
+    @ConnectedSocket() client: AuthenticatedSocket,
+    @MessageBody() data: SendGifDto,
+  ) {
+    try {
+      const { chatId, gifId, replyToId, threadId } = data;
+
+      // Verify user has access to chat
+      await this.verifyUserChatAccess(client.userId, BigInt(chatId));
+
+      // Send GIF through service
+      const result = await this.messengerService.sendGif(
+        BigInt(chatId),
+        client.userId,
+        BigInt(gifId),
+        {
+          replyToId: replyToId ? BigInt(replyToId) : undefined,
+          threadId: threadId ? BigInt(threadId) : undefined,
+        },
+      );
+
+      // Broadcast GIF to all chat participants
+      await this.broadcastToChatRoom(chatId, 'new_message', {
+        ...result,
+        chatId: chatId,
+        messageType: 'GIF',
+      });
+
+      // Send delivery confirmation to sender
+      client.emit('message_sent', {
+        tempId: data.tempId,
+        messageId: result.id,
+        timestamp: result.createdAt,
+      });
+
+      // Update chat's last message timestamp
+      await this.updateChatLastActivity(BigInt(chatId));
+
+      return { success: true, data: result };
+    } catch (error) {
+      this.logger.error('Error sending GIF:', error);
+      client.emit('message_error', {
+        tempId: data.tempId,
+        error: error.message,
+      });
+      throw new WsException(error.message);
+    }
+  }
+
+  @SubscribeMessage('send_custom_emoji')
+  @UseGuards(WsJwtGuard)
+  @UsePipes(new ValidationPipe())
+  async handleSendCustomEmoji(
+    @ConnectedSocket() client: AuthenticatedSocket,
+    @MessageBody() data: SendCustomEmojiDto,
+  ) {
+    try {
+      const { chatId, customEmojiId, replyToId, threadId } = data;
+
+      // Verify user has access to chat
+      await this.verifyUserChatAccess(client.userId, BigInt(chatId));
+
+      // Send custom emoji through service
+      const result = await this.messengerService.sendCustomEmoji(
+        BigInt(chatId),
+        client.userId,
+        BigInt(customEmojiId),
+        {
+          replyToId: replyToId ? BigInt(replyToId) : undefined,
+          threadId: threadId ? BigInt(threadId) : undefined,
+        },
+      );
+
+      // Broadcast custom emoji to all chat participants
+      await this.broadcastToChatRoom(chatId, 'new_message', {
+        ...result,
+        chatId: chatId,
+        messageType: 'CUSTOM_EMOJI',
+      });
+
+      // Send delivery confirmation to sender
+      client.emit('message_sent', {
+        tempId: data.tempId,
+        messageId: result.id,
+        timestamp: result.createdAt,
+      });
+
+      // Update chat's last message timestamp
+      await this.updateChatLastActivity(BigInt(chatId));
+
+      return { success: true, data: result };
+    } catch (error) {
+      this.logger.error('Error sending custom emoji:', error);
+      client.emit('message_error', {
+        tempId: data.tempId,
+        error: error.message,
+      });
       throw new WsException(error.message);
     }
   }

@@ -169,7 +169,7 @@ export interface IChatService {
   /**
    * Получить сообщения чата с пагинацией
    */
-  getMessages(
+  getChatMessages(
     chatId: bigint,
     userId: bigint,
     options?: {

@@ -2,6 +2,7 @@
 export const ChatFlags = {
   ARCHIVED: 1 << 0, // 1 - архивированный
   PUBLIC: 1 << 1, // 2 - публичный
+  PRIVATE: 1 << 2, // 4 - приватный
   VERIFIED: 1 << 2, // 4 - верифицированный
   PREMIUM: 1 << 3, // 8 - премиум
 } as const;

@@ -5,8 +5,9 @@ export class SendMessageDto {
   @IsString()
   chatId: string;
 
+  @IsOptional()
   @IsString()
-  content: string;
+  content?: string;
 
   @IsOptional()
   @IsEnum(MessageType)
@@ -27,6 +28,21 @@ export class SendMessageDto {
   @IsOptional()
   @IsString()
   tempId?: string; // Client-side temporary ID for message tracking
+
+  // Поддержка стикеров
+  @IsOptional()
+  @IsString()
+  stickerId?: string; // ID стикера для отправки
+
+  // Поддержка GIF
+  @IsOptional()
+  @IsString()
+  gifId?: string; // ID GIF для отправки
+
+  // Поддержка кастомных эмоджи
+  @IsOptional()
+  @IsString()
+  customEmojiId?: string; // ID кастомного эмоджи
 }
 
 export class EditMessageDto {
@@ -94,4 +110,65 @@ export class VoiceCallDto {
   @IsOptional()
   @IsArray()
   iceCandidates?: any[];
+}
+
+// Новые DTO для стикеров
+export class SendStickerDto {
+  @IsString()
+  chatId: string;
+
+  @IsString()
+  stickerId: string;
+
+  @IsOptional()
+  @IsString()
+  replyToId?: string;
+
+  @IsOptional()
+  @IsString()
+  threadId?: string;
+
+  @IsOptional()
+  @IsString()
+  tempId?: string;
+}
+
+export class SendGifDto {
+  @IsString()
+  chatId: string;
+
+  @IsString()
+  gifId: string;
+
+  @IsOptional()
+  @IsString()
+  replyToId?: string;
+
+  @IsOptional()
+  @IsString()
+  threadId?: string;
+
+  @IsOptional()
+  @IsString()
+  tempId?: string;
+}
+
+export class SendCustomEmojiDto {
+  @IsString()
+  chatId: string;
+
+  @IsString()
+  customEmojiId: string;
+
+  @IsOptional()
+  @IsString()
+  replyToId?: string;
+
+  @IsOptional()
+  @IsString()
+  threadId?: string;
+
+  @IsOptional()
+  @IsString()
+  tempId?: string;
 }

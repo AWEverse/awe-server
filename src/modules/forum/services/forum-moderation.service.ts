@@ -93,7 +93,7 @@ export class ForumModerationService {
     // Enrich reports with target content
     const enrichedReports = await Promise.all(
       reports.map(async report => {
-        let targetContent = null;
+        let targetContent = undefined;
         if (report.postId) {
           targetContent = await this.getTargetContent(report.postId.toString(), 'POST');
         } else if (report.replyId) {
@@ -269,9 +269,9 @@ export class ForumModerationService {
       // Enrich logs with target content
       const enrichedLogs = await Promise.all(
         logs.map(async log => {
-          let targetContent: any = null;
-          let targetId: string | null = null;
-          let targetType: 'POST' | 'REPLY' | null = null;
+          let targetContent: any = undefined;
+          let targetId: string | undefined = undefined;
+          let targetType: 'POST' | 'REPLY' | undefined = undefined;
 
           if (log.postId) {
             targetId = log.postId.toString();
@@ -291,9 +291,11 @@ export class ForumModerationService {
             targetType,
             targetContent,
             notes:
-              typeof log.metadata === 'object' && log.metadata !== null && 'notes' in log.metadata
+              typeof log.metadata === 'object' &&
+              log.metadata !== undefined &&
+              'notes' in log.metadata
                 ? (log.metadata as any).notes
-                : null,
+                : undefined,
           };
         }),
       );
@@ -371,11 +373,11 @@ export class ForumModerationService {
         throw new NotFoundException('Post not found');
       }
 
-      const updatedFlags = post.flags & ~(1n << 1n); // Clear bit 1 for locked
+      const updatedFlags = BigInt(post.flags) & ~(1n << 1n); // Clear bit 1 for locked
 
       await prisma.forumPost.update({
         where: { id: BigInt(postId) },
-        data: { flags: updatedFlags },
+        data: { flags: Number(updatedFlags) },
       }); // Log the action if forumModerationLog exists
       try {
         await prisma.forumModerationLog.create({
@@ -384,7 +386,7 @@ export class ForumModerationService {
             postId: BigInt(postId),
             action: 'UNLOCK',
             reason,
-            metadata: reason ? { notes: `Unlocked: ${reason}` } : null,
+            metadata: reason ? { notes: `Unlocked: ${reason}` } : undefined,
           },
         });
       } catch (error) {
@@ -411,11 +413,11 @@ export class ForumModerationService {
         throw new NotFoundException('Post not found');
       }
 
-      const updatedFlags = post.flags | (1n << 3n); // Set bit 3 for pinned
+      const updatedFlags = BigInt(post.flags) | (1n << 3n); // Set bit 3 for pinned
 
       await prisma.forumPost.update({
         where: { id: BigInt(postId) },
-        data: { flags: updatedFlags },
+        data: { flags: Number(updatedFlags) },
       }); // Log the action if forumModerationLog exists
       try {
         await prisma.forumModerationLog.create({
@@ -424,7 +426,7 @@ export class ForumModerationService {
             postId: BigInt(postId),
             action: 'PIN',
             reason,
-            metadata: reason ? { notes: reason } : null,
+            metadata: reason ? { notes: reason } : undefined,
           },
         });
       } catch (error) {
@@ -455,7 +457,7 @@ export class ForumModerationService {
 
       await prisma.forumPost.update({
         where: { id: BigInt(postId) },
-        data: { flags: updatedFlags },
+        data: { flags: Number(updatedFlags) },
       }); // Log the action if forumModerationLog exists
       try {
         await prisma.forumModerationLog.create({
@@ -464,7 +466,7 @@ export class ForumModerationService {
             postId: BigInt(postId),
             action: 'UNPIN',
             reason,
-            metadata: reason ? { notes: `Unpinned: ${reason}` } : null,
+            metadata: reason ? { notes: `Unpinned: ${reason}` } : undefined,
           },
         });
       } catch (error) {
@@ -491,11 +493,11 @@ export class ForumModerationService {
         throw new NotFoundException('Post not found');
       }
 
-      const updatedFlags = post.flags | (1n << 5n); // Set bit 5 for featured
+      const updatedFlags = BigInt(post.flags) | (1n << 5n); // Set bit 5 for featured
 
       await prisma.forumPost.update({
         where: { id: BigInt(postId) },
-        data: { flags: updatedFlags },
+        data: { flags: Number(updatedFlags) },
       }); // Log the action if forumModerationLog exists
       try {
         await prisma.forumModerationLog.create({
@@ -504,7 +506,7 @@ export class ForumModerationService {
             postId: BigInt(postId),
             action: 'FEATURE',
             reason,
-            metadata: reason ? { notes: reason } : null,
+            metadata: reason ? { notes: reason } : undefined,
           },
         });
       } catch (error) {
@@ -531,11 +533,11 @@ export class ForumModerationService {
         throw new NotFoundException('Post not found');
       }
 
-      const updatedFlags = post.flags & ~(1n << 5n); // Clear bit 5 for featured
+      const updatedFlags = BigInt(post.flags) & ~(1n << 5n); // Clear bit 5 for featured
 
       await prisma.forumPost.update({
         where: { id: BigInt(postId) },
-        data: { flags: updatedFlags },
+        data: { flags: Number(updatedFlags) },
       }); // Log the action if forumModerationLog exists
       try {
         await prisma.forumModerationLog.create({
@@ -544,7 +546,7 @@ export class ForumModerationService {
             postId: BigInt(postId),
             action: 'UNFEATURE',
             reason,
-            metadata: reason ? { notes: `Unfeatured: ${reason}` } : null,
+            metadata: reason ? { notes: `Unfeatured: ${reason}` } : undefined,
           },
         });
       } catch (error) {
@@ -562,7 +564,7 @@ export class ForumModerationService {
     reason?: string,
   ): Promise<{ success: boolean }> {
     // Verify new category exists
-    const category = await this.prisma.category.findUnique({
+    const category = await this.prisma.forumCategory.findUnique({
       where: { id: BigInt(newCategoryId) },
     });
 
@@ -586,21 +588,21 @@ export class ForumModerationService {
       });
 
       // Update old category counters
-      await prisma.category.update({
+      await prisma.forumCategory.update({
         where: { id: post.categoryId },
         data: {
-          postCount: { decrement: 1 },
-          topicCount: { decrement: 1 },
+          postsCount: { decrement: 1 },
+          topicsCount: { decrement: 1 },
         },
       });
 
       // Update new category counters
-      await prisma.category.update({
+      await prisma.forumCategory.update({
         where: { id: BigInt(newCategoryId) },
         data: {
-          postCount: { increment: 1 },
-          topicCount: { increment: 1 },
-          lastActivity: new Date(),
+          postsCount: { increment: 1 },
+          topicsCount: { increment: 1 },
+          updatedAt: new Date(),
         },
       }); // Log action if forumModerationLog exists
       try {
@@ -639,21 +641,21 @@ export class ForumModerationService {
           });
 
           // Update category counters
-          await prisma.category.update({
+          await prisma.forumCategory.update({
             where: { id: post.categoryId },
             data: {
-              postCount: { decrement: 1 },
-              topicCount: { decrement: 1 },
+              postsCount: { decrement: 1 },
+              topicsCount: { decrement: 1 },
             },
           });
         }
       } else {
-        const reply = await prisma.reply.findUnique({
+        const reply = await prisma.forumReply.findUnique({
           where: { id: BigInt(targetId) },
         });
 
         if (reply) {
-          await prisma.reply.delete({
+          await prisma.forumReply.delete({
             where: { id: BigInt(targetId) },
           });
 
@@ -661,7 +663,7 @@ export class ForumModerationService {
           await prisma.forumPost.update({
             where: { id: reply.postId },
             data: {
-              replyCount: { decrement: 1 },
+              repliesCount: { decrement: 1 },
             },
           });
         }
@@ -675,7 +677,7 @@ export class ForumModerationService {
               : { replyId: BigInt(targetId) }),
             action: 'DELETE',
             reason,
-            metadata: reason ? { notes: reason } : null,
+            metadata: reason ? { notes: reason } : undefined,
           },
         });
       } catch (error) {
@@ -697,7 +699,7 @@ export class ForumModerationService {
       });
       return !!post;
     } else {
-      const reply = await this.prisma.reply.findUnique({
+      const reply = await this.prisma.forumReply.findUnique({
         where: { id: BigInt(targetId) },
       });
       return !!reply;
@@ -722,7 +724,7 @@ export class ForumModerationService {
         },
       });
     } else {
-      return this.prisma.reply.findUnique({
+      return this.prisma.forumReply.findUnique({
         where: { id: BigInt(targetId) },
         select: {
           id: true,

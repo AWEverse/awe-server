@@ -9,6 +9,7 @@ import {
   Query,
   Request,
   ParseIntPipe,
+  UseGuards,
 } from '@nestjs/common';
 import { ApiTags, ApiOperation, ApiResponse, ApiParam, ApiQuery } from '@nestjs/swagger';
 import {
@@ -42,6 +43,16 @@ export class ForumController extends BaseForumController {
   ) {
     super();
   }
+
+  @UseGuards(OptionalAuthEndpoint)
+  @Get('forum/:id')
+  @ApiOperation({ summary: 'Get forum overview' })
+  @ApiResponse({
+    status: 200,
+    description: 'Forum overview retrieved successfully',
+    type: ForumStatsDto,
+  })
+
   // Posts endpoints
   @Post('posts')
   @AuthenticatedEndpoint()

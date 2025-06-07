@@ -33,6 +33,7 @@ export class MessangerService implements IChatService {
     private readonly prisma: PrismaService,
     private readonly repo: MessangerRepository,
   ) {}
+
   async getUserStatistics(userId: bigint, requesterId: bigint): Promise<UserChatStatistics> {
     // Check if requester has permission to view user stats
     if (userId !== requesterId) {
@@ -118,6 +119,7 @@ export class MessangerService implements IChatService {
       lastActivity: lastActivity?.createdAt || new Date(0),
     };
   }
+
   async getUnreadInfo(userId: bigint): Promise<{
     totalUnread: number;
     chatUnreads: Array<{ chatId: bigint; unreadCount: number; lastMessageAt: Date }>;
@@ -141,6 +143,7 @@ export class MessangerService implements IChatService {
       throw new BadRequestException(`Failed to get unread info: ${error.message}`);
     }
   }
+
   async searchMessages(
     chatId: bigint,
     userId: bigint,
@@ -234,9 +237,11 @@ export class MessangerService implements IChatService {
       take: limit,
       skip: offset,
     });
+    const formattedMessages = messages.map(m => this.formatMessageInfo(m));
+    const groupedMessages = this.groupMessagesByDate(formattedMessages);
 
     return {
-      messages: messages.map(m => this.formatMessageInfo(m)),
+      messagesGroups: groupedMessages,
       hasMore: messages.length === limit,
       nextCursor: messages.length === limit ? String(offset + limit) : undefined,
     };
@@ -260,6 +265,7 @@ export class MessangerService implements IChatService {
             description,
             type,
             inviteLink,
+            flags: isPublic ? ChatFlags.PUBLIC : ChatFlags.PRIVATE,
             createdBy: { connect: { id: userId } },
           },
         });
@@ -633,40 +639,34 @@ export class MessangerService implements IChatService {
       reactions: [],
     }));
 
+    // Группировка сообщений по датам как в Telegram
+    const groupedMessages = this.groupMessagesByDate(formattedMessages);
+
     return {
-      messages: formattedMessages,
+      messagesGroups: groupedMessages,
       hasMore: formattedMessages.length === limit,
       nextCursor: formattedMessages.length === limit ? String(offset + limit) : undefined,
     };
   }
 
+  /**
+   * Alias for getChatMessages to maintain backward compatibility
+   */
   async getMessages(
     chatId: bigint,
     userId: bigint,
     options?: {
       limit?: number;
+      offset?: number;
       beforeMessageId?: bigint;
       afterMessageId?: bigint;
-      threadId?: bigint;
+      messageType?: MessageType;
+      searchQuery?: string;
     },
   ): Promise<PaginatedMessages> {
-    const limit = options?.limit ?? 50;
-    const where: any = { chatId, deletedAt: undefined };
-    if (options?.beforeMessageId) where.id = { lt: options.beforeMessageId };
-    if (options?.afterMessageId) where.id = { gt: options.afterMessageId };
-    if (options?.threadId) where.threadId = options.threadId;
-    const messages = await this.prisma.message.findMany({
-      where,
-      include: { sender: true, attachments: true, reactions: true },
-      orderBy: { createdAt: 'desc' },
-      take: limit,
-    });
-    return {
-      messages: messages.map(m => this.formatMessageInfo(m)),
-      hasMore: messages.length === limit,
-      nextCursor: messages.length === limit ? String(messages[messages.length - 1].id) : undefined,
-    };
+    return this.getChatMessages(chatId, userId, options);
   }
+
   async getChatParticipants(
     chatId: bigint,
     userId: bigint,
@@ -945,7 +945,6 @@ export class MessangerService implements IChatService {
       },
     };
   }
-
   private formatMessageInfo(message: any): MessageInfo {
     return {
       id: message.id,
@@ -990,6 +989,28 @@ export class MessangerService implements IChatService {
           reaction: r.reaction,
           createdAt: r.createdAt,
           user: r.user,
+        })) || [],
+      // Добавляем поддержку стикеров, GIF и эмоджи
+      stickers:
+        message.messageStickers?.map((ms: any) => ({
+          id: ms.id,
+          messageId: ms.messageId,
+          stickerId: ms.stickerId,
+          sticker: ms.sticker,
+        })) || [],
+      gifs:
+        message.messageGifs?.map((mg: any) => ({
+          id: mg.id,
+          messageId: mg.messageId,
+          gifId: mg.gifId,
+          gif: mg.gif,
+        })) || [],
+      customEmojis:
+        message.messageEmojis?.map((me: any) => ({
+          id: me.id,
+          messageId: me.messageId,
+          emojiId: me.emojiId,
+          emoji: me.emoji,
         })) || [],
     };
   }
@@ -1314,8 +1335,12 @@ export class MessangerService implements IChatService {
       orderBy: { createdAt: 'asc' },
       take: limit,
     });
+
+    const formattedMessages = messages.map(m => this.formatMessageInfo(m));
+    const groupedMessages = this.groupMessagesByDate(formattedMessages);
+
     return {
-      messages: messages.map(m => this.formatMessageInfo(m)),
+      messagesGroups: groupedMessages,
       hasMore: messages.length === limit,
       nextCursor: messages.length === limit ? String(messages[messages.length - 1].id) : undefined,
     };
@@ -1623,5 +1648,507 @@ export class MessangerService implements IChatService {
       default:
         return false;
     }
+  }
+
+  private groupMessagesByDate(messages: MessageInfo[]): { [key: string]: MessageInfo[] } {
+    const groups: { [key: string]: MessageInfo[] } = {};
+    const now = new Date();
+    const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+    const yesterday = new Date(today.getTime() - 24 * 60 * 60 * 1000);
+
+    for (const message of messages) {
+      const messageDate = new Date(message.createdAt);
+      const messageDateStart = new Date(
+        messageDate.getFullYear(),
+        messageDate.getMonth(),
+        messageDate.getDate(),
+      );
+
+      let groupKey: string;
+
+      if (messageDateStart.getTime() === today.getTime()) {
+        groupKey = 'today';
+      } else if (messageDateStart.getTime() === yesterday.getTime()) {
+        groupKey = 'yesterday';
+      } else {
+        // Для более старых сообщений используем формат даты
+        const day = messageDate.getDate().toString().padStart(2, '0');
+        const month = (messageDate.getMonth() + 1).toString().padStart(2, '0');
+        const year = messageDate.getFullYear();
+
+        // Если это текущий год, не показываем год
+        if (year === now.getFullYear()) {
+          groupKey = `${day}.${month}`;
+        } else {
+          groupKey = `${day}.${month}.${year}`;
+        }
+      }
+
+      if (!groups[groupKey]) {
+        groups[groupKey] = [];
+      }
+
+      groups[groupKey].push(message);
+    }
+
+    // Сортируем сообщения внутри каждой группы по времени (новые сверху)
+    Object.keys(groups).forEach(key => {
+      groups[key].sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
+    });
+
+    return groups;
+  }
+
+  /**
+   * Отправка стикера в чат
+   */
+  async sendSticker(
+    chatId: bigint,
+    senderId: bigint,
+    stickerId: bigint,
+    options?: {
+      replyToId?: bigint;
+      threadId?: bigint;
+    },
+  ): Promise<MessageInfo> {
+    try {
+      // Проверяем доступ к чату
+      const hasAccess = await this.checkChatAccess(chatId, senderId);
+      if (!hasAccess) {
+        throw new ForbiddenException('No access to this chat');
+      }
+
+      // Проверяем, что стикер существует
+      const sticker = await this.prisma.sticker.findUnique({
+        where: { id: stickerId },
+        include: { pack: true },
+      });
+
+      if (!sticker) {
+        throw new NotFoundException('Sticker not found');
+      }
+
+      // Проверяем, что пользователь имеет доступ к стикеру (если он премиум)
+      if (sticker.pack && (sticker.pack.flags & 1) > 0) {
+        // premium flag
+        const hasPurchase = await this.prisma.stickerPurchase.findFirst({
+          where: {
+            userId: senderId,
+            packId: sticker.packId,
+          },
+        });
+
+        if (!hasPurchase) {
+          throw new ForbiddenException('Premium sticker pack not purchased');
+        }
+      }
+
+      // Создаем сообщение со стикером
+      const result = await this.prisma.$transaction(async tx => {
+        // Создаем сообщение
+        const message = await tx.message.create({
+          data: {
+            chatId,
+            senderId,
+            content: Buffer.from(''), // Пустой контент для стикера
+            header: Buffer.from(JSON.stringify({ type: 'sticker', stickerId })),
+            messageType: 'STICKER',
+            replyToId: options?.replyToId,
+            threadId: options?.threadId,
+          },
+        });
+
+        // Создаем связь сообщения со стикером
+        await tx.messageSticker.create({
+          data: {
+            messageId: message.id,
+            stickerId,
+          },
+        });
+
+        // Обновляем статистику использования стикера
+        await tx.sticker.update({
+          where: { id: stickerId },
+          data: {
+            usageCount: { increment: 1 },
+          },
+        });
+
+        // Обновляем информацию о последнем сообщении в чате
+        await tx.chat.update({
+          where: { id: chatId },
+          data: {
+            lastMessageAt: new Date(),
+            lastMessageText: '😀 Sticker',
+            updatedAt: new Date(),
+          },
+        });
+
+        return message;
+      });
+
+      // Получаем полную информацию о сообщении
+      const fullMessage = await this.prisma.message.findUnique({
+        where: { id: result.id },
+        include: {
+          sender: {
+            select: {
+              id: true,
+              username: true,
+              fullName: true,
+              avatarUrl: true,
+              flags: true,
+              lastSeen: true,
+            },
+          },
+          messageStickers: {
+            include: {
+              sticker: {
+                include: {
+                  pack: true,
+                },
+              },
+            },
+          },
+          replyTo: {
+            include: {
+              sender: {
+                select: {
+                  id: true,
+                  username: true,
+                  fullName: true,
+                  avatarUrl: true,
+                  flags: true,
+                  lastSeen: true,
+                },
+              },
+            },
+          },
+        },
+      });
+
+      if (!fullMessage) {
+        throw new NotFoundException('Message not found after creation');
+      }
+
+      return this.formatMessageInfo(fullMessage);
+    } catch (error) {
+      throw new BadRequestException(`Failed to send sticker: ${error.message}`);
+    }
+  }
+
+  /**
+   * Отправка GIF в чат
+   */
+  async sendGif(
+    chatId: bigint,
+    senderId: bigint,
+    gifId: bigint,
+    options?: {
+      replyToId?: bigint;
+      threadId?: bigint;
+    },
+  ): Promise<MessageInfo> {
+    try {
+      // Проверяем доступ к чату
+      const hasAccess = await this.checkChatAccess(chatId, senderId);
+      if (!hasAccess) {
+        throw new ForbiddenException('No access to this chat');
+      }
+
+      // Проверяем, что GIF существует
+      const gif = await this.prisma.gif.findUnique({
+        where: { id: gifId },
+      });
+
+      if (!gif) {
+        throw new NotFoundException('GIF not found');
+      }
+
+      // Создаем сообщение с GIF
+      const result = await this.prisma.$transaction(async tx => {
+        // Создаем сообщение
+        const message = await tx.message.create({
+          data: {
+            chatId,
+            senderId,
+            content: Buffer.from(''), // Пустой контент для GIF
+            header: Buffer.from(JSON.stringify({ type: 'gif', gifId })),
+            messageType: 'GIF',
+            replyToId: options?.replyToId,
+            threadId: options?.threadId,
+          },
+        });
+
+        // Создаем связь сообщения с GIF
+        await tx.messageGif.create({
+          data: {
+            messageId: message.id,
+            gifId,
+          },
+        });
+
+        // Обновляем статистику использования GIF
+        await tx.gif.update({
+          where: { id: gifId },
+          data: {
+            usageCount: { increment: 1 },
+          },
+        });
+
+        // Обновляем информацию о последнем сообщении в чате
+        await tx.chat.update({
+          where: { id: chatId },
+          data: {
+            lastMessageAt: new Date(),
+            lastMessageText: '🎬 GIF',
+            updatedAt: new Date(),
+          },
+        });
+
+        return message;
+      });
+
+      // Получаем полную информацию о сообщении
+      const fullMessage = await this.prisma.message.findUnique({
+        where: { id: result.id },
+        include: {
+          sender: {
+            select: {
+              id: true,
+              username: true,
+              fullName: true,
+              avatarUrl: true,
+              flags: true,
+              lastSeen: true,
+            },
+          },
+          messageGifs: {
+            include: {
+              gif: {
+                include: {
+                  category: true,
+                },
+              },
+            },
+          },
+          replyTo: {
+            include: {
+              sender: {
+                select: {
+                  id: true,
+                  username: true,
+                  fullName: true,
+                  avatarUrl: true,
+                  flags: true,
+                  lastSeen: true,
+                },
+              },
+            },
+          },
+        },
+      });
+
+      if (!fullMessage) {
+        throw new NotFoundException('Message not found after creation');
+      }
+
+      return this.formatMessageInfo(fullMessage);
+    } catch (error) {
+      throw new BadRequestException(`Failed to send GIF: ${error.message}`);
+    }
+  }
+
+  /**
+   * Отправка кастомного эмоджи в чат
+   */
+  async sendCustomEmoji(
+    chatId: bigint,
+    senderId: bigint,
+    emojiId: bigint,
+    options?: {
+      replyToId?: bigint;
+      threadId?: bigint;
+    },
+  ): Promise<MessageInfo> {
+    try {
+      // Проверяем доступ к чату
+      const hasAccess = await this.checkChatAccess(chatId, senderId);
+      if (!hasAccess) {
+        throw new ForbiddenException('No access to this chat');
+      }
+
+      // Проверяем, что эмоджи существует и доступен
+      const emoji = await this.prisma.customEmoji.findUnique({
+        where: { id: emojiId },
+      });
+
+      if (!emoji) {
+        throw new NotFoundException('Custom emoji not found');
+      }
+
+      // Проверяем доступ к эмоджи (если он принадлежит конкретному чату)
+      if (emoji.chatId && emoji.chatId !== chatId) {
+        throw new ForbiddenException('Custom emoji not available in this chat');
+      }
+
+      // Создаем сообщение с кастомным эмоджи
+      const result = await this.prisma.$transaction(async tx => {
+        // Создаем сообщение
+        const message = await tx.message.create({
+          data: {
+            chatId,
+            senderId,
+            content: Buffer.from(''), // Пустой контент для эмоджи
+            header: Buffer.from(JSON.stringify({ type: 'custom_emoji', emojiId })),
+            messageType: 'CUSTOM_EMOJI',
+            replyToId: options?.replyToId,
+            threadId: options?.threadId,
+          },
+        });
+
+        // Создаем связь сообщения с эмоджи
+        await tx.messageEmoji.create({
+          data: {
+            messageId: message.id,
+            emojiId,
+          },
+        });
+
+        // Обновляем статистику использования эмоджи
+        await tx.customEmoji.update({
+          where: { id: emojiId },
+          data: {
+            usageCount: { increment: 1 },
+          },
+        });
+
+        // Обновляем информацию о последнем сообщении в чате
+        await tx.chat.update({
+          where: { id: chatId },
+          data: {
+            lastMessageAt: new Date(),
+            lastMessageText: `😀 ${emoji.name}`,
+            updatedAt: new Date(),
+          },
+        });
+
+        return message;
+      });
+
+      // Получаем полную информацию о сообщении
+      const fullMessage = await this.prisma.message.findUnique({
+        where: { id: result.id },
+        include: {
+          sender: {
+            select: {
+              id: true,
+              username: true,
+              fullName: true,
+              avatarUrl: true,
+              flags: true,
+              lastSeen: true,
+            },
+          },
+          messageEmojis: {
+            include: {
+              emoji: true,
+            },
+          },
+          replyTo: {
+            include: {
+              sender: {
+                select: {
+                  id: true,
+                  username: true,
+                  fullName: true,
+                  avatarUrl: true,
+                  flags: true,
+                  lastSeen: true,
+                },
+              },
+            },
+          },
+        },
+      });
+
+      if (!fullMessage) {
+        throw new NotFoundException('Message not found after creation');
+      }
+
+      return this.formatMessageInfo(fullMessage);
+    } catch (error) {
+      throw new BadRequestException(`Failed to send custom emoji: ${error.message}`);
+    }
+  }
+
+  /**
+   * Получение доступных стикер-паков для пользователя
+   */
+  async getUserStickerPacks(userId: bigint): Promise<any[]> {
+    const userPacks = await this.prisma.userStickerPack.findMany({
+      where: { userId },
+      include: {
+        pack: {
+          include: {
+            stickers: {
+              orderBy: { position: 'asc' },
+            },
+          },
+        },
+      },
+    });
+
+    // Добавляем бесплатные паки
+    const freePacks = await this.prisma.stickerPack.findMany({
+      where: {
+        price: 0,
+        flags: { not: { equals: 16 } }, // не отключенные
+      },
+      include: {
+        stickers: {
+          orderBy: { position: 'asc' },
+        },
+      },
+    });
+
+    return [...userPacks.map(up => up.pack), ...freePacks];
+  }
+
+  /**
+   * Получение популярных GIF
+   */
+  async getTrendingGifs(limit: number = 20): Promise<any[]> {
+    return this.prisma.gif.findMany({
+      where: {
+        flags: { not: { equals: 4 } }, // не NSFW
+      },
+      orderBy: { usageCount: 'desc' },
+      take: limit,
+      include: {
+        category: true,
+      },
+    });
+  }
+
+  /**
+   * Поиск GIF по запросу
+   */
+  async searchGifs(query: string, limit: number = 20): Promise<any[]> {
+    return this.prisma.gif.findMany({
+      where: {
+        OR: [
+          { title: { contains: query, mode: 'insensitive' } },
+          { tags: { contains: query, mode: 'insensitive' } },
+          { searchText: { contains: query, mode: 'insensitive' } },
+        ],
+        flags: { not: { equals: 4 } }, // не NSFW
+      },
+      orderBy: { usageCount: 'desc' },
+      take: limit,
+      include: {
+        category: true,
+      },
+    });
   }
 }
