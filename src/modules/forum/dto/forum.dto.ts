@@ -233,6 +233,7 @@ export class CreateForumCategoryDto {
   @IsOptional()
   @IsBoolean()
   private?: boolean;
+  forumId: string | number | bigint | boolean;
 }
 
 export class UpdateForumCategoryDto {

@@ -55,6 +55,7 @@ export class ForumCategoryService {
     const createData = {
       ...createCategoryDto,
       parentId: createCategoryDto.parentId ? BigInt(createCategoryDto.parentId) : null,
+      forumId: BigInt(createCategoryDto.forumId), // Ensure forumId is provided and cast to BigInt
     };
 
     const category = await this.prisma.forumCategory.create({
