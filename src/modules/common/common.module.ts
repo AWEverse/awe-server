@@ -1,6 +1,5 @@
 import { Module, Global } from '@nestjs/common';
 import { ConfigModule } from '@nestjs/config';
-import { ScheduleModule } from '@nestjs/schedule';
 
 // Services
 import { MemoryOptimizationService } from './services/memory-optimization.service';
@@ -13,14 +12,11 @@ import { BigIntInterceptor } from './interceptors/bigint.interceptor';
 
 @Global()
 @Module({
-  imports: [ConfigModule, ScheduleModule.forRoot()],
+  imports: [ConfigModule],
   providers: [
-    // Optimization services
     MemoryOptimizationService,
     DatabaseOptimizationService,
     OptimizedCacheService,
-
-    // Interceptors
     PerformanceInterceptor,
     BigIntInterceptor,
   ],

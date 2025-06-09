@@ -18,12 +18,10 @@ import { ApiTags, ApiOperation, ApiResponse, ApiConsumes, ApiBody } from '@nestj
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { GetUser } from '../common/decorators/get-user.decorator';
 import { User } from 'generated/client';
-import {
-  R2StorageService,
-  R2BatchService,
-  R2MaintenanceService,
-  BatchUploadItem,
-} from 'src/libs/cloudflare-r2';
+import { R2StorageService } from '../../libs/cloudflare-r2/services/r2-storage.service';
+import { R2BatchService } from '../../libs/cloudflare-r2/services/r2-batch.service';
+import { R2MaintenanceService } from '../../libs/cloudflare-r2/services/r2-maintenance.service';
+import { BatchUploadItem } from '../../libs/cloudflare-r2/services/r2-batch.service';
 
 export class UploadFileDto {
   fileType: string;

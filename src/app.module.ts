@@ -1,8 +1,10 @@
 import { Module } from '@nestjs/common';
 import { ConfigModule } from '@nestjs/config';
+import { ScheduleModule } from '@nestjs/schedule';
 import { APP_INTERCEPTOR } from '@nestjs/core';
 
 import { SupabaseModule } from './libs/supabase/supabase.module';
+import { PrismaModule } from './libs/supabase/db/prisma.service';
 import { AuthModule } from './modules/auth/auth.module';
 import { MessangerModule } from './modules/messanger/messanger.module';
 import { UsersModule } from './modules/users/users.module';
@@ -11,31 +13,23 @@ import { UploadsModule } from './modules/uploads/uploads.module';
 import { MediaHostingModule } from './modules/media-hosting/media-hosting.module';
 import { CommonModule } from './modules/common/common.module';
 
-// Performance optimizations
-import { PerformanceInterceptor } from './modules/common/interceptors/performance.interceptor';
-
 @Module({
   imports: [
     ConfigModule.forRoot({
       isGlobal: true,
       envFilePath: process.env.NODE_ENV === 'production' ? '.env' : '.env.development.local',
-      cache: true, // Кешируем конфигурацию для производительности
+      cache: true,
     }),
-    CommonModule, // Должен быть первым для глобальных провайдеров
+    ScheduleModule.forRoot(),
+    PrismaModule, // Global PrismaService
+    CommonModule,
     AuthModule,
     MessangerModule,
     UsersModule,
-    ForumModule,
+    // ForumModule, // Uncomment if you want to enable forum module
     UploadsModule,
     MediaHostingModule,
     SupabaseModule,
-  ],
-  providers: [
-    // Глобальные интерцепторы для оптимизации
-    {
-      provide: APP_INTERCEPTOR,
-      useClass: PerformanceInterceptor,
-    },
   ],
 })
 export class AppModule {}

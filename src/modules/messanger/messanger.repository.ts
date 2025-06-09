@@ -1,5 +1,5 @@
 import { Injectable } from '@nestjs/common';
-import { PrismaService } from 'src/libs/supabase/db/prisma.service';
+import { PrismaService } from '../../libs/supabase/db/prisma.service';
 import { ChatType, ChatRole, MessageType } from './types';
 
 @Injectable()

@@ -21,7 +21,7 @@ import {
   GetKeyBundleDto,
   RotateSignedPreKeyDto,
 } from './dto/crypto.dto';
-import { GetUser } from 'src/modules/common/decorators/get-user.decorator';
+import { GetUser } from '../../common/decorators/get-user.decorator';
 
 @Controller('crypto')
 @UseGuards(JwtAuthGuard)

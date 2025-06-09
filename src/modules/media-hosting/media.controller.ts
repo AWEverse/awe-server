@@ -40,7 +40,9 @@ export class ProcessMediaDto {
 export class MediaController {
   private readonly logger = new Logger(MediaController.name);
 
-  constructor(private readonly mediaProcessing: MediaProcessingService) {}
+  constructor(private readonly mediaProcessing: MediaProcessingService) {
+    Logger.log('Media hosting loaded');
+  }
 
   @Post('process')
   @ApiOperation({ summary: 'Запуск обработки медиа файла' })

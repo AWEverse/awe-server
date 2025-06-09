@@ -52,6 +52,9 @@ export class ForumCategoryService {
     }
 
     // Transform DTO to Prisma data format
+    if (!createCategoryDto.forumId) {
+      throw new BadRequestException('forumId is required');
+    }
     const createData = {
       ...createCategoryDto,
       parentId: createCategoryDto.parentId ? BigInt(createCategoryDto.parentId) : null,

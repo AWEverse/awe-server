@@ -12,7 +12,7 @@ import {
   KeyBundleResponse,
   KeyStatusResponse,
 } from './dto/crypto.dto';
-import { PrismaService } from 'src/libs/supabase/db/prisma.service';
+import { PrismaService } from '../../../libs/supabase/db/prisma.service';
 
 @Injectable()
 export class CryptoService {
@@ -139,8 +139,6 @@ export class CryptoService {
     const { oldKeyId, newKeyId, publicKey, signature, expiresAt } = rotateDto;
 
     const userCrypto = await this.findUserCrypto(userId);
-
-
 
     try {
       return await this.prisma.$transaction(async tx => {

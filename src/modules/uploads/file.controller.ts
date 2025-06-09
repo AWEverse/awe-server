@@ -23,7 +23,7 @@ import { User } from 'generated/client';
 import { ImageProcessingService } from './services/image-processing.service';
 import { FileValidationService } from './services/file-validation.service';
 import { FileMetadataService, SearchFilesQuery } from './services/file-metadata.service';
-import { R2StorageService } from 'src/libs/cloudflare-r2';
+import { R2StorageService } from '../../libs/cloudflare-r2/services/r2-storage.service';
 import multer, { Multer } from 'multer';
 
 export class UploadWithProcessingDto {

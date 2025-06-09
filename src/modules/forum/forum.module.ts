@@ -1,5 +1,4 @@
 import { Module } from '@nestjs/common';
-import { PrismaService } from '../../libs/supabase/db/prisma.service';
 import { ForumController } from './controllers/forum.controller';
 import { ForumCategoryController } from './controllers/forum-category.controller';
 import { ForumSearchController } from './controllers/forum-search.controller';
@@ -19,7 +18,6 @@ import { ForumModerationService } from './services/forum-moderation.service';
     ForumModerationController,
   ],
   providers: [
-    PrismaService,
     ForumService,
     ForumReplyService,
     ForumCategoryService,

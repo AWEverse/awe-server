@@ -1,0 +1,13 @@
+{
+  "modules": [],
+  "errors": [],
+  "warnings": [],
+  "circularDependencies": [],
+  "unusedModules": [],
+  "statistics": {
+    "totalModules": 0,
+    "totalProviders": 0,
+    "totalControllers": 0,
+    "averageDependencies": 0
+  }
+}

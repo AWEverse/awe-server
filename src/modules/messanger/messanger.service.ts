@@ -3,8 +3,9 @@ import {
   BadRequestException,
   ForbiddenException,
   NotFoundException,
+  Logger,
 } from '@nestjs/common';
-import { PrismaService } from 'src/libs/supabase/db/prisma.service';
+import { PrismaService } from '../../libs/supabase/db/prisma.service';
 import { IChatService } from './interfaces/chat.interface';
 import {
   ChatInfo,
@@ -37,7 +38,9 @@ export class MessangerService implements IChatService {
     private readonly repo: MessangerRepository,
     private readonly cache: MemoryCacheService,
     private readonly dbPool: OptimizedDatabasePool,
-  ) {}
+  ) {
+    Logger.log('MessangerService initialized with optimized database pool and cache');
+  }
 
   // Cache constants for performance optimization
   private static readonly CACHE_TTL = {
@@ -534,7 +537,7 @@ export class MessangerService implements IChatService {
     chatId: bigint,
     senderId: bigint,
     content: string | Buffer,
-    messageType?: MessageType,
+    messageType: MessageType = MessageType.TEXT,
     options?: {
       header?: Record<string, any>;
       replyToId?: bigint;
@@ -543,87 +546,55 @@ export class MessangerService implements IChatService {
     },
   ): Promise<MessageInfo> {
     try {
-      const contentStr = typeof content === 'string' ? content : content.toString();
-      const msgType = messageType || MessageType.TEXT;
+      const userPreviewSelect = {
+        select: {
+          id: true,
+          username: true,
+          fullName: true,
+          avatarUrl: true,
+          flags: true,
+          lastSeen: true,
+        },
+      };
 
-      const result = await this.prisma.$queryRaw<
-        Array<{
-          message_id: bigint;
-          success: boolean;
-          error_message: string | undefined;
-        }>
-      >`
-        SELECT * FROM send_optimized_message(
-          ${chatId}::bigint,
-          ${senderId}::bigint,
-          ${msgType}::text,
-          ${contentStr}::text,
-          ${options?.replyToId || undefined}::bigint,
-          ${options?.threadId || undefined}::bigint,
-          ${0}::integer
-        )
-      `;
+      const contentBuffer = Buffer.isBuffer(content) ? content : Buffer.from(content);
+      const headerBuffer = options?.header
+        ? Buffer.from(JSON.stringify(options.header))
+        : Buffer.alloc(0);
 
-      if (!result[0].success) {
-        throw new BadRequestException(result[0].error_message || 'Failed to send message');
-      }
-
-      const messageId = result[0].message_id;
-
-      const message = await this.prisma.message.findUnique({
-        where: { id: messageId },
+      const message = await this.prisma.message.create({
+        data: {
+          chatId,
+          senderId,
+          content: contentBuffer,
+          messageType,
+          header: headerBuffer,
+          replyToId: options?.replyToId,
+          threadId: options?.threadId,
+          attachments: options?.attachments ? { create: options.attachments } : undefined,
+        },
         include: {
-          sender: {
-            select: {
-              id: true,
-              username: true,
-              fullName: true,
-              avatarUrl: true,
-              flags: true,
-              lastSeen: true,
-            },
-          },
+          sender: userPreviewSelect,
           replyTo: {
             include: {
-              sender: {
-                select: {
-                  id: true,
-                  username: true,
-                  fullName: true,
-                  avatarUrl: true,
-                  flags: true,
-                  lastSeen: true,
-                },
-              },
+              sender: userPreviewSelect,
             },
           },
           attachments: true,
           reactions: {
             include: {
-              user: {
-                select: {
-                  id: true,
-                  username: true,
-                  fullName: true,
-                  avatarUrl: true,
-                  flags: true,
-                  lastSeen: true,
-                },
-              },
+              user: userPreviewSelect,
             },
           },
         },
       });
-
-      if (!message) {
-        throw new NotFoundException('Message not found after creation');
-      }
 
       return this.formatMessageInfo(message);
     } catch (error) {
       throw new BadRequestException(`Failed to send message: ${error.message}`);
     }
   }
+
   async getChatMessages(
     chatId: bigint,
     userId: bigint,
@@ -1000,7 +971,7 @@ export class MessangerService implements IChatService {
       replyToId: message.replyToId,
       forwardedFromId: message.forwardedFromId,
       threadId: message.threadId,
-      replyDepth: message.replyDepth || 0,
+      replyDepth: message.replyDepth ?? 0,
       sender: message.sender
         ? {
             id: message.sender.id,

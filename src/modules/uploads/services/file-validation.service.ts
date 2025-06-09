@@ -1,7 +1,7 @@
 import { Injectable, Logger, BadRequestException } from '@nestjs/common';
 import * as mimeTypes from 'mime-types';
 import { createHash } from 'crypto';
-import { R2StorageService } from 'src/libs/cloudflare-r2';
+import { R2StorageService } from '../../../libs/cloudflare-r2/services/r2-storage.service';
 
 export interface FileValidationResult {
   isValid: boolean;

@@ -2,7 +2,6 @@ import { Module } from '@nestjs/common';
 import { JwtModule } from '@nestjs/jwt';
 import { ConfigModule, ConfigService } from '@nestjs/config';
 import { BullModule } from '@nestjs/bull';
-import { ScheduleModule } from '@nestjs/schedule';
 import { EventEmitterModule } from '@nestjs/event-emitter';
 
 // Core services
@@ -23,8 +22,9 @@ import { WebSocketOptimizer } from './optimizations/websocket-optimization';
 import { NotificationService } from './notifications/notification.service';
 
 // External dependencies
-import { PrismaService } from '../../libs/supabase/db/prisma.service';
 import { PushNotificationService } from './notifications/push-notification.service';
+import { MemoryCacheService } from '../common/cache/memory-cache.service';
+import { OptimizedDatabasePool } from '../common/database/optimized-pool.service';
 
 @Module({
   imports: [
@@ -39,7 +39,6 @@ import { PushNotificationService } from './notifications/push-notification.servi
       verboseMemoryLeak: false,
       ignoreErrors: false,
     }),
-    ScheduleModule.forRoot(),
     JwtModule.registerAsync({
       imports: [ConfigModule],
       useFactory: async (configService: ConfigService) => ({
@@ -61,7 +60,6 @@ import { PushNotificationService } from './notifications/push-notification.servi
     // Core services
     MessangerService,
     MessangerRepository,
-    PrismaService,
 
     // Real-time
     MessangerGateway,
@@ -71,6 +69,8 @@ import { PushNotificationService } from './notifications/push-notification.servi
     MonitoringService,
     ServiceOptimizer,
     WebSocketOptimizer,
+    MemoryCacheService,
+    OptimizedDatabasePool,
 
     // Notifications
     NotificationService,
@@ -81,6 +81,8 @@ import { PushNotificationService } from './notifications/push-notification.servi
     MessangerRepository,
     DatabaseOptimizer,
     MonitoringService,
+    MemoryCacheService,
+    OptimizedDatabasePool,
     NotificationService,
     PushNotificationService,
   ],

@@ -1,4 +1,4 @@
-import { Injectable, OnModuleInit, OnModuleDestroy, Logger } from '@nestjs/common';
+import { Injectable, OnModuleInit, OnModuleDestroy, Logger, Global, Module } from '@nestjs/common';
 import { PrismaClient } from 'generated/client';
 import { ConfigService } from '@nestjs/config';
 
@@ -8,11 +8,12 @@ export class PrismaService extends PrismaClient implements OnModuleInit, OnModul
 
   constructor(private configService: ConfigService) {
     super({
-      datasources: {
-        db: {
-          url: process.env.DATABASE_URL,
+      datasources:
+        {
+          db: {
+            url: process.env.DATABASE_URL,
+          },
         },
-      },
       // Оптимизированное логирование
       log:
         process.env.NODE_ENV === 'production'
@@ -24,20 +25,6 @@ export class PrismaService extends PrismaClient implements OnModuleInit, OnModul
               { emit: 'event', level: 'warn' },
             ],
     });
-
-    // Настройка слушателей событий только для разработки
-    if (process.env.NODE_ENV !== 'production') {
-      (this.$on as any)('query', (e: any) => {
-        if (parseInt(e.duration) > 1000) {
-          // Логируем только медленные запросы
-          this.logger.warn(`Slow query: ${e.query} - ${e.duration}ms`);
-        }
-      });
-
-      (this.$on as any)('error', (e: any) => {
-        this.logger.error('Prisma error:', e);
-      });
-    }
   }
 
   async onModuleInit() {
@@ -120,3 +107,10 @@ export class PrismaService extends PrismaClient implements OnModuleInit, OnModul
     }
   }
 }
+
+@Global()
+@Module({
+  providers: [PrismaService],
+  exports: [PrismaService],
+})
+export class PrismaModule {}

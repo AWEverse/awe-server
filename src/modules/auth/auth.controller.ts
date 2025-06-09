@@ -21,7 +21,9 @@ import { ResponseInterceptor } from '../common/interceptors/response.interceptor
 export class AuthController {
   private readonly logger = new Logger(AuthController.name);
 
-  constructor(private readonly authService: AuthService) {}
+  constructor(private readonly authService: AuthService) {
+    Logger.log('Auth Module loaded ');
+  }
 
   @Post('register')
   @ApiOperation({ summary: 'Register a new user' })

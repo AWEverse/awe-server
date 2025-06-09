@@ -10,7 +10,7 @@ import {
 import { ApiTags, ApiOperation, ApiResponse, ApiQuery } from '@nestjs/swagger';
 import { BaseForumController, OptionalAuthEndpoint } from './base-forum.controller';
 import { ForumSearchService } from '../services/forum-search.service';
-import { OptionalAuthGuard } from 'src/modules/auth/guards/optional-auth.guard';
+import { OptionalAuthGuard } from '../../auth/guards/optional-auth.guard';
 
 @ApiTags('Forum Search')
 @Controller('forum/search')

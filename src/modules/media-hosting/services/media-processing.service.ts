@@ -1,7 +1,7 @@
 import { Injectable, Logger } from '@nestjs/common';
-import { R2StorageService } from 'src/libs/cloudflare-r2';
-import { FileValidationService } from 'src/modules/uploads/services/file-validation.service';
-import { ImageProcessingService } from 'src/modules/uploads/services/image-processing.service';
+import { R2StorageService } from '../../../libs/cloudflare-r2/services/r2-storage.service';
+import { FileValidationService } from '../../uploads/services/file-validation.service';
+import { ImageProcessingService } from '../../uploads/services/image-processing.service';
 
 export interface MediaProcessingJob {
   id: string;

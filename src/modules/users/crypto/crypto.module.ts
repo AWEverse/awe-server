@@ -1,10 +1,9 @@
 import { Module } from '@nestjs/common';
 import { CryptoController } from './crypto.controller';
 import { CryptoService } from './crypto.service';
-import { PrismaService } from 'src/libs/supabase/db/prisma.service';
 
 @Module({
-  imports: [PrismaService],
+  imports: [],
   controllers: [CryptoController],
   providers: [CryptoService],
   exports: [CryptoService],

@@ -46,10 +46,6 @@ export class CreateChatDto {
 }
 
 export class SendMessageDto {
-  @IsString()
-  @Transform(({ value }) => BigInt(value))
-  chatId: bigint;
-
   @IsNotEmpty()
   content: string | Buffer;
 
@@ -61,18 +57,15 @@ export class SendMessageDto {
   messageType?: MessageType = MessageType.TEXT;
 
   @IsOptional()
-  @IsString()
   @Transform(({ value }) => (value ? BigInt(value) : undefined))
   replyToId?: bigint;
 
   @IsOptional()
-  @IsString()
   @Transform(({ value }) => (value ? BigInt(value) : undefined))
   threadId?: bigint;
 }
 
 export class EditMessageDto {
-  @IsString()
   @Transform(({ value }) => BigInt(value))
   messageId: bigint;
 
@@ -84,7 +77,6 @@ export class EditMessageDto {
 }
 
 export class GetMessagesDto {
-  @IsString()
   @Transform(({ value }) => BigInt(value))
   chatId: bigint;
 
@@ -94,22 +86,18 @@ export class GetMessagesDto {
   limit?: number = 50;
 
   @IsOptional()
-  @IsString()
   @Transform(({ value }) => (value ? BigInt(value) : undefined))
   beforeMessageId?: bigint;
 
   @IsOptional()
-  @IsString()
   @Transform(({ value }) => (value ? BigInt(value) : undefined))
   afterMessageId?: bigint;
 }
 
 export class AddParticipantDto {
-  @IsString()
   @Transform(({ value }) => BigInt(value))
   chatId: bigint;
 
-  @IsString()
   @Transform(({ value }) => BigInt(value))
   userId: bigint;
 
@@ -119,11 +107,9 @@ export class AddParticipantDto {
 }
 
 export class RemoveParticipantDto {
-  @IsString()
   @Transform(({ value }) => BigInt(value))
   chatId: bigint;
 
-  @IsString()
   @Transform(({ value }) => BigInt(value))
   userId: bigint;
 
@@ -138,11 +124,9 @@ export class RemoveParticipantDto {
 }
 
 export class UpdateParticipantRoleDto {
-  @IsString()
   @Transform(({ value }) => BigInt(value))
   chatId: bigint;
 
-  @IsString()
   @Transform(({ value }) => BigInt(value))
   userId: bigint;
 
@@ -151,11 +135,9 @@ export class UpdateParticipantRoleDto {
 }
 
 export class MuteParticipantDto {
-  @IsString()
   @Transform(({ value }) => BigInt(value))
   chatId: bigint;
 
-  @IsString()
   @Transform(({ value }) => BigInt(value))
   userId: bigint;
 

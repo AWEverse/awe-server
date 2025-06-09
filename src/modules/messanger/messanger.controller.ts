@@ -558,17 +558,20 @@ export class MessangerController {
   @ApiResponse({ status: 403, description: 'No access to this chat' })
   async getMessages(
     @Param('chatId', ParseIntPipe) chatId: number,
-    @Query('limit', ParseIntPipe) limit = 50,
-    @Query('beforeId', ParseIntPipe) beforeId?: number,
-    @Query('afterId', ParseIntPipe) afterId?: number,
+    @Query('limit') limit?: number,
+    @Query('beforeId') beforeId?: number,
+    @Query('afterId') afterId?: number,
     @Request() req?: UserRequest,
   ) {
     try {
       const userId = this.getUserIdFromRequest(req);
-      this.logger.log(`Getting messages for chat ${chatId}, user ${userId}, limit: ${limit}`);
+      const normalizedLimit = limit ? Number(limit) : 50;
+      this.logger.log(
+        `Getting messages for chat ${chatId}, user ${userId}, limit: ${normalizedLimit}`,
+      );
 
       return await this.messengerService.getMessages(BigInt(chatId), userId, {
-        limit,
+        limit: normalizedLimit,
         beforeMessageId: beforeId ? BigInt(beforeId) : undefined,
         afterMessageId: afterId ? BigInt(afterId) : undefined,
       });
@@ -577,6 +580,7 @@ export class MessangerController {
       throw error;
     }
   }
+
   @Put('messages/:messageId')
   @ApiOperation({
     summary: 'Edit message',

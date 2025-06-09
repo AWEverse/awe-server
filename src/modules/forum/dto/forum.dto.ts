@@ -233,7 +233,11 @@ export class CreateForumCategoryDto {
   @IsOptional()
   @IsBoolean()
   private?: boolean;
-  forumId: string | number | bigint | boolean;
+  // Если forumId нужен и это строка:
+  @ApiPropertyOptional({ description: 'Forum ID' })
+  @IsOptional()
+  @IsString()
+  forumId?: string;
 }
 
 export class UpdateForumCategoryDto {
