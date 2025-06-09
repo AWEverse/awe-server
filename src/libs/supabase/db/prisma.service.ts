@@ -27,14 +27,14 @@ export class PrismaService extends PrismaClient implements OnModuleInit, OnModul
 
     // Настройка слушателей событий только для разработки
     if (process.env.NODE_ENV !== 'production') {
-      this.$on('query', (e: any) => {
+      (this.$on as any)('query', (e: any) => {
         if (parseInt(e.duration) > 1000) {
           // Логируем только медленные запросы
           this.logger.warn(`Slow query: ${e.query} - ${e.duration}ms`);
         }
       });
 
-      this.$on('error', (e: any) => {
+      (this.$on as any)('error', (e: any) => {
         this.logger.error('Prisma error:', e);
       });
     }
