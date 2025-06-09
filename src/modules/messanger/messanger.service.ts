@@ -26,13 +26,38 @@ import {
 } from './types';
 import { ChatStatistics, UserChatStatistics } from './types/statistics.type';
 import { MessangerRepository } from './messanger.repository';
+// High-performance optimizations
+import { MemoryCacheService } from '../common/cache/memory-cache.service';
+import { OptimizedDatabasePool } from '../common/database/optimized-pool.service';
 
 @Injectable()
 export class MessangerService implements IChatService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly repo: MessangerRepository,
+    private readonly cache: MemoryCacheService,
+    private readonly dbPool: OptimizedDatabasePool,
   ) {}
+
+  // Cache constants for performance optimization
+  private static readonly CACHE_TTL = {
+    USER_CHATS: 5 * 60 * 1000, // 5 minutes
+    CHAT_INFO: 10 * 60 * 1000, // 10 minutes
+    MESSAGE_PAGE: 2 * 60 * 1000, // 2 minutes
+    USER_STATS: 15 * 60 * 1000, // 15 minutes
+    CHAT_PARTICIPANTS: 5 * 60 * 1000, // 5 minutes
+    UNREAD_COUNT: 30 * 1000, // 30 seconds
+  };
+
+  private static readonly CACHE_KEYS = {
+    userChats: (userId: bigint) => `user_chats:${userId}`,
+    chatInfo: (chatId: bigint) => `chat_info:${chatId}`,
+    chatMessages: (chatId: bigint, page: number) => `chat_messages:${chatId}:${page}`,
+    userStats: (userId: bigint) => `user_stats:${userId}`,
+    chatParticipants: (chatId: bigint) => `chat_participants:${chatId}`,
+    unreadCount: (userId: bigint) => `unread_count:${userId}`,
+    chatStatistics: (chatId: bigint) => `chat_statistics:${chatId}`,
+  };
 
   async getUserStatistics(userId: bigint, requesterId: bigint): Promise<UserChatStatistics> {
     // Check if requester has permission to view user stats
@@ -53,6 +78,13 @@ export class MessangerService implements IChatService {
       if (sharedChats === 0) {
         throw new ForbiddenException("No permission to view this user's statistics");
       }
+    }
+
+    const cachedStats = await this.cache.get<UserChatStatistics>(
+      MessangerService.CACHE_KEYS.userStats(userId),
+    );
+    if (cachedStats) {
+      return cachedStats;
     }
 
     const [messagesSent, totalChats, activeChats, lastActivity, mostActiveData] = await Promise.all(
@@ -96,7 +128,7 @@ export class MessangerService implements IChatService {
       chatTitle = chat?.title || undefined;
     }
 
-    return {
+    const stats: UserChatStatistics = {
       userId,
       totalChats,
       activeChats,
@@ -118,6 +150,13 @@ export class MessangerService implements IChatService {
       dailyActivity: [], // Would need aggregation by date
       lastActivity: lastActivity?.createdAt || new Date(0),
     };
+    await this.cache.set(
+      MessangerService.CACHE_KEYS.userStats(userId),
+      stats,
+      MessangerService.CACHE_TTL.USER_STATS,
+    );
+
+    return stats;
   }
 
   async getUnreadInfo(userId: bigint): Promise<{

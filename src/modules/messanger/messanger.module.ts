@@ -3,6 +3,7 @@ import { JwtModule } from '@nestjs/jwt';
 import { ConfigModule, ConfigService } from '@nestjs/config';
 import { BullModule } from '@nestjs/bull';
 import { ScheduleModule } from '@nestjs/schedule';
+import { EventEmitterModule } from '@nestjs/event-emitter';
 
 // Core services
 import { MessangerService } from './messanger.service';
@@ -28,6 +29,16 @@ import { PushNotificationService } from './notifications/push-notification.servi
 @Module({
   imports: [
     ConfigModule,
+    EventEmitterModule.forRoot({
+      // Оптимизация для EventEmitter - минимальная конфигурация для производительности
+      wildcard: false,
+      delimiter: '.',
+      newListener: false,
+      removeListener: false,
+      maxListeners: 20, // Уменьшено для экономии памяти
+      verboseMemoryLeak: false,
+      ignoreErrors: false,
+    }),
     ScheduleModule.forRoot(),
     JwtModule.registerAsync({
       imports: [ConfigModule],
