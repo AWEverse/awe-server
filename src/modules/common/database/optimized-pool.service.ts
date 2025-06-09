@@ -74,8 +74,8 @@ export class OptimizedDatabasePool implements OnModuleInit, OnModuleDestroy {
       // Оптимизации для производительности
       statement_timeout: 30000,
       query_timeout: 30000,
-      keepalive: true,
-      keepaliveInitialDelayMillis: 10000,
+      keepAlive: true,
+      keepAliveInitialDelayMillis: 10000,
     };
 
     // Основной пул (универсальный)
