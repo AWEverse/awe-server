@@ -189,16 +189,16 @@ model RoleGlobally {
 }
 
 model User {
-  id           BigInt  @id @default(autoincrement())
-  email        String  @unique @db.VarChar(320) // RFC 5321 compliant
-  username     String  @unique @db.VarChar(32)
-  passwordHash String? @db.VarChar(128)
-  fullName     String? @db.VarChar(128)
-  bio          String? @db.VarChar(500)
-  avatarUrl    String? @db.VarChar(512)
-  bannerUrl    String? @db.VarChar(512)
-  color        String? @db.Char(7) // HEX цвет для оформления
-  phoneNumber  String? @unique @db.VarChar(15)
+  id          BigInt  @id @default(autoincrement())
+  email       String  @unique @db.VarChar(320) // RFC 5321 compliant
+  username    String  @unique @db.VarChar(32)
+  supabaseId  String? @unique @db.VarChar(36) // Supabase UUID
+  fullName    String? @db.VarChar(128)
+  bio         String? @db.VarChar(500)
+  avatarUrl   String? @db.VarChar(512)
+  bannerUrl   String? @db.VarChar(512)
+  color       String? @db.Char(7) // HEX цвет для оформления
+  phoneNumber String? @unique @db.VarChar(15)
 
   // Битовые флаги: verified(1), bot(2), online(4), creator(8), live(16), premium(32), staff(64)
   // ВАЖНО: Максимум 31 флаг для Int (2^31-1)
@@ -226,20 +226,21 @@ model User {
   reputation         Int    @default(0) // Для форума
 
   // Связи
-  role                 RoleGlobally            @relation(fields: [roleId], references: [id])
-  devices              Device[]
-  sessions             Session[]
-  chatsCreated         Chat[]                  @relation("chatsCreated")
-  chatParticipants     ChatParticipant[]
-  messages             Message[]               @relation("messagesSent")
-  refreshTokens        RefreshTokenBlacklist[]
-  userCrypto           UserCrypto?
-  messageReactions     MessageReaction[]
-  messageReads         MessageRead[]
-  contactsAdded        ContactList[]           @relation("UserContacts")
-  contactOf            ContactList[]           @relation("ContactOf")
-  userSettings         UserSettings?
-  notificationSettings NotificationSettings[]
+  role                   RoleGlobally            @relation(fields: [roleId], references: [id])
+  devices                Device[]
+  sessions               Session[]
+  chatsCreated           Chat[]                  @relation("chatsCreated")
+  chatParticipants       ChatParticipant[]
+  messages               Message[]               @relation("messagesSent")
+  refreshTokens          RefreshToken[]
+  refreshTokensBlacklist RefreshTokenBlacklist[]
+  userCrypto             UserCrypto?
+  messageReactions       MessageReaction[]
+  messageReads           MessageRead[]
+  contactsAdded          ContactList[]           @relation("UserContacts")
+  contactOf              ContactList[]           @relation("ContactOf")
+  userSettings           UserSettings?
+  notificationSettings   NotificationSettings[]
 
   // Контент и социальные функции
   contents        Content[]
@@ -404,6 +405,35 @@ model UsedOneTimePreKey {
   @@unique([userCryptoId, keyId])
   @@index([userCryptoId])
   @@index([usedAt])
+}
+
+// ===== SECURITY AUDIT =====
+
+model SecurityAuditLog {
+  id          BigInt    @id @default(autoincrement())
+  userId      BigInt?
+  eventType   String    @db.VarChar(50)
+  severity    String    @db.VarChar(20) // LOW, MEDIUM, HIGH, CRITICAL
+  description String    @db.VarChar(500)
+  ipAddress   String?   @db.Inet
+  userAgent   String?   @db.VarChar(512)
+  metadata    Json?
+  timestamp   DateTime  @default(now()) @db.Timestamptz(3)
+  resolvedAt  DateTime? @db.Timestamptz(3)
+  resolvedBy  BigInt?
+
+  // Relations
+  user     User? @relation("SecurityAudits", fields: [userId], references: [id], onDelete: SetNull)
+  resolver User? @relation("SecurityResolver", fields: [resolvedBy], references: [id], onDelete: SetNull)
+
+  @@index([userId])
+  @@index([eventType])
+  @@index([severity])
+  @@index([timestamp])
+  @@index([ipAddress])
+  @@index([userId, timestamp])
+  @@index([eventType, timestamp])
+  @@index([severity, timestamp])
 }
 
 // ===== МЕССЕНДЖЕР =====
@@ -1560,30 +1590,28 @@ model Report {
   @@index([status, createdAt]) // Для очереди модерации
 }
 
-model SecurityAuditLog {
-  id          BigInt    @id @default(autoincrement())
-  userId      BigInt?
-  action      String    @db.VarChar(64)
-  severity    Int       @default(0) // 0=info, 1=warning, 2=error, 3=critical
-  description String    @db.VarChar(255)
-  ipAddress   String?   @db.Inet
-  userAgent   String?   @db.VarChar(512) // Увеличено для современных UA
-  metadata    Json?
-  flags       Int       @default(0) // resolved(1)
-  resolvedAt  DateTime? @db.Timestamptz(3)
-  resolvedBy  BigInt?
-  createdAt   DateTime  @default(now()) @db.Timestamptz(3)
-
-  user     User? @relation("SecurityAudits", fields: [userId], references: [id], onDelete: SetNull)
-  resolver User? @relation("SecurityResolver", fields: [resolvedBy], references: [id], onDelete: SetNull)
-
-  @@index([userId, createdAt])
-  @@index([severity, flags])
-  @@index([action, createdAt])
-  @@index([ipAddress])
-}
-
 // ===== НАСТРОЙКИ И КОНФИГУРАЦИЯ =====
+
+model RefreshToken {
+  id        BigInt   @id @default(autoincrement())
+  userId    BigInt
+  token     String   @unique @db.VarChar(255)
+  expiresAt DateTime @db.Timestamptz(3)
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @db.Timestamptz(3)
+  deviceId  String?  @db.VarChar(64) // Optional device identifier
+  ipAddress String?  @db.Inet
+  userAgent String?  @db.VarChar(512)
+  isRevoked Boolean  @default(false)
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([expiresAt])
+  @@index([token])
+  @@index([isRevoked])
+  @@index([userId, isRevoked])
+}
 
 model RefreshTokenBlacklist {
   id        BigInt   @id @default(autoincrement())

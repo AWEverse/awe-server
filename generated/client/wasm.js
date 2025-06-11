@@ -133,7 +133,7 @@ exports.Prisma.UserScalarFieldEnum = {
   id: 'id',
   email: 'email',
   username: 'username',
-  passwordHash: 'passwordHash',
+  supabaseId: 'supabaseId',
   fullName: 'fullName',
   bio: 'bio',
   avatarUrl: 'avatarUrl',
@@ -218,6 +218,20 @@ exports.Prisma.UsedOneTimePreKeyScalarFieldEnum = {
   userCryptoId: 'userCryptoId',
   keyId: 'keyId',
   usedAt: 'usedAt'
+};
+
+exports.Prisma.SecurityAuditLogScalarFieldEnum = {
+  id: 'id',
+  userId: 'userId',
+  eventType: 'eventType',
+  severity: 'severity',
+  description: 'description',
+  ipAddress: 'ipAddress',
+  userAgent: 'userAgent',
+  metadata: 'metadata',
+  timestamp: 'timestamp',
+  resolvedAt: 'resolvedAt',
+  resolvedBy: 'resolvedBy'
 };
 
 exports.Prisma.ChatScalarFieldEnum = {
@@ -773,19 +787,17 @@ exports.Prisma.ReportScalarFieldEnum = {
   updatedAt: 'updatedAt'
 };
 
-exports.Prisma.SecurityAuditLogScalarFieldEnum = {
+exports.Prisma.RefreshTokenScalarFieldEnum = {
   id: 'id',
   userId: 'userId',
-  action: 'action',
-  severity: 'severity',
-  description: 'description',
+  token: 'token',
+  expiresAt: 'expiresAt',
+  createdAt: 'createdAt',
+  updatedAt: 'updatedAt',
+  deviceId: 'deviceId',
   ipAddress: 'ipAddress',
   userAgent: 'userAgent',
-  metadata: 'metadata',
-  flags: 'flags',
-  resolvedAt: 'resolvedAt',
-  resolvedBy: 'resolvedBy',
-  createdAt: 'createdAt'
+  isRevoked: 'isRevoked'
 };
 
 exports.Prisma.RefreshTokenBlacklistScalarFieldEnum = {
@@ -1019,7 +1031,7 @@ exports.Prisma.RoleGloballyOrderByRelevanceFieldEnum = {
 exports.Prisma.UserOrderByRelevanceFieldEnum = {
   email: 'email',
   username: 'username',
-  passwordHash: 'passwordHash',
+  supabaseId: 'supabaseId',
   fullName: 'fullName',
   bio: 'bio',
   avatarUrl: 'avatarUrl',
@@ -1054,6 +1066,14 @@ exports.Prisma.SignedPreKeyOrderByRelevanceFieldEnum = {
 
 exports.Prisma.OneTimePreKeyOrderByRelevanceFieldEnum = {
   publicKey: 'publicKey'
+};
+
+exports.Prisma.SecurityAuditLogOrderByRelevanceFieldEnum = {
+  eventType: 'eventType',
+  severity: 'severity',
+  description: 'description',
+  ipAddress: 'ipAddress',
+  userAgent: 'userAgent'
 };
 
 exports.Prisma.ChatOrderByRelevanceFieldEnum = {
@@ -1220,9 +1240,9 @@ exports.Prisma.ReportOrderByRelevanceFieldEnum = {
   resolution: 'resolution'
 };
 
-exports.Prisma.SecurityAuditLogOrderByRelevanceFieldEnum = {
-  action: 'action',
-  description: 'description',
+exports.Prisma.RefreshTokenOrderByRelevanceFieldEnum = {
+  token: 'token',
+  deviceId: 'deviceId',
   ipAddress: 'ipAddress',
   userAgent: 'userAgent'
 };
@@ -1409,6 +1429,7 @@ exports.Prisma.ModelName = {
   SignedPreKey: 'SignedPreKey',
   OneTimePreKey: 'OneTimePreKey',
   UsedOneTimePreKey: 'UsedOneTimePreKey',
+  SecurityAuditLog: 'SecurityAuditLog',
   Chat: 'Chat',
   ChatParticipant: 'ChatParticipant',
   Message: 'Message',
@@ -1456,7 +1477,7 @@ exports.Prisma.ModelName = {
   ForumAttachment: 'ForumAttachment',
   ForumModerationLog: 'ForumModerationLog',
   Report: 'Report',
-  SecurityAuditLog: 'SecurityAuditLog',
+  RefreshToken: 'RefreshToken',
   RefreshTokenBlacklist: 'RefreshTokenBlacklist',
   ContactList: 'ContactList',
   UserSettings: 'UserSettings',

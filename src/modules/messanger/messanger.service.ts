@@ -29,7 +29,6 @@ import { ChatStatistics, UserChatStatistics } from './types/statistics.type';
 import { MessangerRepository } from './messanger.repository';
 // High-performance optimizations
 import { MemoryCacheService } from '../common/cache/memory-cache.service';
-import { OptimizedDatabasePool } from '../common/database/optimized-pool.service';
 
 @Injectable()
 export class MessangerService implements IChatService {
@@ -37,9 +36,8 @@ export class MessangerService implements IChatService {
     private readonly prisma: PrismaService,
     private readonly repo: MessangerRepository,
     private readonly cache: MemoryCacheService,
-    private readonly dbPool: OptimizedDatabasePool,
   ) {
-    Logger.log('MessangerService initialized with optimized database pool and cache');
+    Logger.log('MessangerService initialized with cache');
   }
 
   // Cache constants for performance optimization
@@ -86,6 +84,7 @@ export class MessangerService implements IChatService {
     const cachedStats = await this.cache.get<UserChatStatistics>(
       MessangerService.CACHE_KEYS.userStats(userId),
     );
+
     if (cachedStats) {
       return cachedStats;
     }
@@ -153,6 +152,7 @@ export class MessangerService implements IChatService {
       dailyActivity: [], // Would need aggregation by date
       lastActivity: lastActivity?.createdAt || new Date(0),
     };
+
     await this.cache.set(
       MessangerService.CACHE_KEYS.userStats(userId),
       stats,
@@ -280,7 +280,7 @@ export class MessangerService implements IChatService {
       skip: offset,
     });
     const formattedMessages = messages.map(m => this.formatMessageInfo(m));
-    const groupedMessages = this.groupMessagesByDate(formattedMessages);
+    const groupedMessages = this.groupMessagesByTime(formattedMessages);
 
     return {
       messagesGroups: groupedMessages,
@@ -650,7 +650,7 @@ export class MessangerService implements IChatService {
     }));
 
     // Группировка сообщений по датам как в Telegram
-    const groupedMessages = this.groupMessagesByDate(formattedMessages);
+    const groupedMessages = this.groupMessagesByTime(formattedMessages);
 
     return {
       messagesGroups: groupedMessages,
@@ -758,6 +758,7 @@ export class MessangerService implements IChatService {
 
     return true;
   }
+
   async removeParticipant(
     chatId: bigint,
     userId: bigint,
@@ -851,6 +852,7 @@ export class MessangerService implements IChatService {
       },
     }));
   }
+
   async getChatStatistics(chatId: bigint, userId: bigint): Promise<ChatStatistics> {
     // Check if user has access to this chat
     const hasAccess = await this.checkChatAccess(chatId, userId);
@@ -1064,6 +1066,7 @@ export class MessangerService implements IChatService {
       take: limit,
       skip: offset,
     });
+
     const messages = await this.prisma.message.findMany({
       where: {
         chat: { participants: { some: { userId, leftAt: undefined } } },
@@ -1103,6 +1106,7 @@ export class MessangerService implements IChatService {
     });
     return this.formatMessageInfo(updated);
   }
+
   async deleteMessage(messageId: bigint, userId: bigint, forEveryone?: boolean): Promise<boolean> {
     const message = await this.prisma.message.findUnique({ where: { id: messageId } });
     if (!message) throw new Error('Message not found');
@@ -1137,6 +1141,7 @@ export class MessangerService implements IChatService {
       },
     };
   }
+
   async removeReaction(messageId: bigint, userId: bigint, reaction: string): Promise<boolean> {
     await this.prisma.messageReaction.deleteMany({ where: { messageId, userId, reaction } });
     return true;
@@ -1175,10 +1180,12 @@ export class MessangerService implements IChatService {
     await this.prisma.chat.update({ where: { id: chatId }, data: { pinnedMessageId: messageId } });
     return true;
   }
+
   async unpinMessage(chatId: bigint, userId: bigint): Promise<boolean> {
     await this.prisma.chat.update({ where: { id: chatId }, data: { pinnedMessageId: null } });
     return true;
   }
+
   async getPinnedMessages(chatId: bigint, userId: bigint): Promise<MessageInfo[]> {
     const chat = await this.prisma.chat.findUnique({
       where: { id: chatId },
@@ -1268,6 +1275,7 @@ export class MessangerService implements IChatService {
     });
     return true;
   }
+
   async generateInviteLink(chatId: bigint, userId: bigint): Promise<string> {
     const invite = Math.random().toString(36).substring(2, 10);
     await this.prisma.chat.update({ where: { id: chatId }, data: { inviteLink: invite } });
@@ -1299,6 +1307,7 @@ export class MessangerService implements IChatService {
     });
     return { ...attachment, thumbnail: undefined, description: undefined };
   }
+
   async downloadAttachment(attachmentId: bigint, userId: bigint): Promise<Buffer> {
     const attachment = await this.prisma.messageAttachment.findUnique({
       where: { id: attachmentId },
@@ -1329,6 +1338,7 @@ export class MessangerService implements IChatService {
     });
     return { ...thread, title: thread.title ?? undefined };
   }
+
   async getThreadMessages(
     threadId: bigint,
     userId: bigint,
@@ -1347,7 +1357,7 @@ export class MessangerService implements IChatService {
     });
 
     const formattedMessages = messages.map(m => this.formatMessageInfo(m));
-    const groupedMessages = this.groupMessagesByDate(formattedMessages);
+    const groupedMessages = this.groupMessagesByTime(formattedMessages);
 
     return {
       messagesGroups: groupedMessages,
@@ -1355,6 +1365,7 @@ export class MessangerService implements IChatService {
       nextCursor: messages.length === limit ? String(messages[messages.length - 1].id) : undefined,
     };
   }
+
   async getChatSettings(chatId: bigint, userId: bigint): Promise<ChatSettings> {
     const settings = await this.prisma.chatSettings.findUnique({ where: { chatId } });
     if (!settings) throw new Error('Settings not found');
@@ -1372,10 +1383,12 @@ export class MessangerService implements IChatService {
     });
     return { ...updated, settings: (updated.settings ?? {}) as Record<string, any> };
   }
+
   async getUnreadCount(userId: bigint): Promise<number> {
     const info = await this.getUnreadInfo(userId);
     return info.totalUnread;
   }
+
   async getUserChatStatistics(userId: bigint): Promise<UserChatStatistics> {
     return this.getUserStatistics(userId, userId);
   }
@@ -1660,51 +1673,69 @@ export class MessangerService implements IChatService {
     }
   }
 
-  private groupMessagesByDate(messages: MessageInfo[]): { [key: string]: MessageInfo[] } {
-    const groups: { [key: string]: MessageInfo[] } = {};
+  groupMessagesByTime(messages: MessageInfo[]): { [key: string]: MessageInfo[] } {
+    const ONE_MINUTE = 60 * 1000;
+    const TWO_MINUTES = 2 * ONE_MINUTE;
+    const ONE_DAY = 24 * 60 * 60 * 1000;
+
     const now = new Date();
-    const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
-    const yesterday = new Date(today.getTime() - 24 * 60 * 60 * 1000);
+    const today = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime();
+    const yesterday = today - ONE_DAY;
 
-    for (const message of messages) {
-      const messageDate = new Date(message.createdAt);
-      const messageDateStart = new Date(
-        messageDate.getFullYear(),
-        messageDate.getMonth(),
-        messageDate.getDate(),
-      );
+    const parsed = messages
+      .map(msg => {
+        const date = msg.createdAt instanceof Date ? msg.createdAt : new Date(msg.createdAt);
+        return {
+          message: msg,
+          time: date.getTime(),
+          hours: date.getHours(),
+          minutes: date.getMinutes(),
+          dateKey: new Date(date.getFullYear(), date.getMonth(), date.getDate()).getTime(),
+        };
+      })
+      .sort((a, b) => a.time - b.time);
 
-      let groupKey: string;
+    const groups: { [key: string]: MessageInfo[] } = {};
+    let currentGroupKey: string = '';
+    let lastTime: number | null = null;
+    let lastDateKey: number | null = null;
 
-      if (messageDateStart.getTime() === today.getTime()) {
-        groupKey = 'today';
-      } else if (messageDateStart.getTime() === yesterday.getTime()) {
-        groupKey = 'yesterday';
-      } else {
-        // Для более старых сообщений используем формат даты
-        const day = messageDate.getDate().toString().padStart(2, '0');
-        const month = (messageDate.getMonth() + 1).toString().padStart(2, '0');
-        const year = messageDate.getFullYear();
+    for (const item of parsed) {
+      const { time, dateKey, hours, minutes } = item;
+      const isNewDay = lastDateKey !== dateKey;
+      const isTooOld = lastTime === null || time - lastTime >= TWO_MINUTES;
 
-        // Если это текущий год, не показываем год
-        if (year === now.getFullYear()) {
-          groupKey = `${day}.${month}`;
+      if (isNewDay || isTooOld) {
+        const hh = String(hours).padStart(2, '0');
+        const mm = String(minutes).padStart(2, '0');
+        const timeKey = `${hh}:${mm}`;
+
+        let dayLabel = '';
+
+        if (dateKey === today) {
+          dayLabel = 'day_today_';
+        } else if (dateKey === yesterday) {
+          dayLabel = 'day_yesterday_';
         } else {
-          groupKey = `${day}.${month}.${year}`;
+          const d = new Date(dateKey);
+          const dd = String(d.getDate()).padStart(2, '0');
+          const mo = String(d.getMonth() + 1).padStart(2, '0');
+          const yr = d.getFullYear();
+          if (yr === now.getFullYear()) {
+            dayLabel = `day_${dd}.${mo}_`;
+          } else {
+            dayLabel = `day_${dd}.${mo}.${yr}_`;
+          }
         }
+
+        currentGroupKey = dayLabel + timeKey;
+        groups[currentGroupKey] = [];
+        lastDateKey = dateKey;
       }
 
-      if (!groups[groupKey]) {
-        groups[groupKey] = [];
-      }
-
-      groups[groupKey].push(message);
+      groups[currentGroupKey!].push(item.message);
+      lastTime = time;
     }
-
-    // Сортируем сообщения внутри каждой группы по времени (новые сверху)
-    Object.keys(groups).forEach(key => {
-      groups[key].sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
-    });
 
     return groups;
   }

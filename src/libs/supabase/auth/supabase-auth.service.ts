@@ -100,4 +100,65 @@ export class SupabaseAuthService {
       return undefined;
     }
   }
+
+  async resetPasswordForEmail(email: string, redirectTo?: string) {
+    try {
+      const { data, error } = await this.client.auth.resetPasswordForEmail(email, {
+        redirectTo: redirectTo || `${process.env.FRONTEND_URL}/auth/reset-password`,
+      });
+      if (error) throw error;
+      return { message: 'Password reset email sent successfully' };
+    } catch (error) {
+      this.handleAuthError(error as AuthError, 'Failed to send password reset email');
+      return undefined;
+    }
+  }
+
+  async updatePassword(accessToken: string, newPassword: string) {
+    try {
+      // Set the session with the access token
+      await this.client.auth.setSession({
+        access_token: accessToken,
+        refresh_token: '',
+      });
+
+      const { data, error } = await this.client.auth.updateUser({
+        password: newPassword,
+      });
+      if (error) throw error;
+      return { user: data.user, message: 'Password updated successfully' };
+    } catch (error) {
+      this.handleAuthError(error as AuthError, 'Failed to update password');
+      return undefined;
+    }
+  }
+
+  async verifyOtp(email: string, token: string, type: 'signup' | 'recovery' | 'email_change') {
+    try {
+      const { data, error } = await this.client.auth.verifyOtp({
+        email,
+        token,
+        type,
+      });
+      if (error) throw error;
+      return { user: data.user, session: data.session };
+    } catch (error) {
+      this.handleAuthError(error as AuthError, 'Invalid or expired token');
+      return undefined;
+    }
+  }
+
+  async resendConfirmation(email: string) {
+    try {
+      const { data, error } = await this.client.auth.resend({
+        type: 'signup',
+        email,
+      });
+      if (error) throw error;
+      return { message: 'Confirmation email sent successfully' };
+    } catch (error) {
+      this.handleAuthError(error as AuthError, 'Failed to resend confirmation email');
+      return undefined;
+    }
+  }
 }
