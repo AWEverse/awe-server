@@ -25,7 +25,10 @@ export class SupabaseAuthService {
     const supabaseKey = process.env.SUPABASE_KEY;
 
     if (!supabaseUrl || !supabaseKey) {
-      throw new Error('Missing SUPABASE_URL or SUPABASE_KEY environment variables');
+      const missing: string[] = [];
+      if (!supabaseUrl) missing.push('SUPABASE_URL');
+      if (!supabaseKey) missing.push('SUPABASE_KEY');
+      throw new Error(`Missing required environment variables: ${missing.join(', ')}`);
     }
 
     this.client = createClient(supabaseUrl, supabaseKey, {

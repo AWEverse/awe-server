@@ -17,7 +17,12 @@ import { CommonModule } from './modules/common/common.module';
   imports: [
     ConfigModule.forRoot({
       isGlobal: true,
-      envFilePath: process.env.NODE_ENV === 'production' ? '.env' : '.env.development.local',
+      envFilePath: [
+        `.env.${process.env.NODE_ENV}.local`,
+        `.env.${process.env.NODE_ENV}`,
+        '.env.local',
+        '.env',
+      ],
       cache: true,
     }),
     ScheduleModule.forRoot(),
