@@ -31,7 +31,7 @@ export class ProfileController {
   })
   @ApiResponse({ status: 401, description: 'Unauthorized' })
   @ApiResponse({ status: 404, description: 'User not found' })
-  async getMyProfile(@GetUser('sub') userId: string): Promise<ProfileResponseDto> {
+  async getMyProfile(@GetUser('id') userId: string): Promise<ProfileResponseDto> {
     return this.profileService.getProfile(userId);
   }
 
@@ -58,7 +58,7 @@ export class ProfileController {
   @ApiResponse({ status: 401, description: 'Unauthorized' })
   @ApiResponse({ status: 404, description: 'User not found' })
   async updateMyProfile(
-    @GetUser('sub') userId: string,
+    @GetUser('id') userId: string,
     @Body() updateProfileDto: UpdateProfileDto,
   ): Promise<ProfileResponseDto> {
     return this.profileService.updateProfile(userId, updateProfileDto);
@@ -69,7 +69,7 @@ export class ProfileController {
   @ApiResponse({ status: 200, description: 'Profile statistics retrieved successfully' })
   @ApiResponse({ status: 401, description: 'Unauthorized' })
   @ApiResponse({ status: 404, description: 'User not found' })
-  async getMyProfileStats(@GetUser('sub') userId: string) {
+  async getMyProfileStats(@GetUser('id') userId: string) {
     return this.profileService.getProfileStats(userId);
   }
 
@@ -95,7 +95,7 @@ export class ProfileController {
   })
   async checkUsernameAvailability(
     @Param('username') username: string,
-    @GetUser('sub') currentUserId?: string,
+    @GetUser('id') currentUserId?: string,
   ) {
     return this.profileService.checkUsernameAvailability(username, currentUserId);
   }
@@ -117,7 +117,7 @@ export class ProfileController {
   @ApiResponse({ status: 200, description: 'Followers retrieved successfully' })
   @ApiResponse({ status: 401, description: 'Unauthorized' })
   async getMyFollowers(
-    @GetUser('sub') userId: string,
+    @GetUser('id') userId: string,
     @Query('page', new DefaultValuePipe(1), ParseIntPipe) page: number,
     @Query('limit', new DefaultValuePipe(20), ParseIntPipe) limit: number,
   ) {
@@ -164,7 +164,7 @@ export class ProfileController {
   @ApiResponse({ status: 200, description: 'Following retrieved successfully' })
   @ApiResponse({ status: 401, description: 'Unauthorized' })
   async getMyFollowing(
-    @GetUser('sub') userId: string,
+    @GetUser('id') userId: string,
     @Query('page', new DefaultValuePipe(1), ParseIntPipe) page: number,
     @Query('limit', new DefaultValuePipe(20), ParseIntPipe) limit: number,
   ) {

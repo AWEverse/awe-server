@@ -65,11 +65,9 @@ export class JwtStrategy extends PassportStrategy(Strategy) {
 
       if (!supabaseUser) {
         throw new UnauthorizedException('Invalid token');
-      }
-
-      // Get user from database
+      }      // Get user from database using supabaseId instead of id
       const dbUser = await this.prisma.user.findUnique({
-        where: { id: BigInt(payload.sub) },
+        where: { supabaseId: payload.sub },
         include: {
           role: true,
           userSettings: true,

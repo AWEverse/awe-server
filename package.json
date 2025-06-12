@@ -20,7 +20,10 @@
     "test:e2e": "jest --config ./test/jest-e2e.json",
     "prisma:generate": "node prisma/merge-schemas.js && prisma generate",
     "prisma:merge": "node prisma/merge-schemas.js",
-    "prisma:migrate": "prisma migrate dev"
+    "prisma:migrate": "prisma migrate dev",
+    "prisma:migrate:fixed": "prisma migrate dev && node fix-bigserial.js",
+    "prisma:migrate:reset": "prisma migrate reset && node fix-bigserial.js",
+    "prisma:migrate:deploy": "prisma migrate deploy && node fix-bigserial.js"
   },
   "dependencies": {
     "@aws-sdk/client-s3": "^3.821.0",

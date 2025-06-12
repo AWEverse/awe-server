@@ -4,6 +4,7 @@ import { PrismaService } from '../../../libs/supabase/db/prisma.service';
 @Injectable()
 export class AdminGuard implements CanActivate {
   constructor(private prisma: PrismaService) {}
+
   async canActivate(context: ExecutionContext): Promise<boolean> {
     const request = context.switchToHttp().getRequest();
     const user = request.user;

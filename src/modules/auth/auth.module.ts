@@ -5,7 +5,6 @@ import { ConfigModule, ConfigService } from '@nestjs/config';
 import { ScheduleModule } from '@nestjs/schedule';
 import { AuthService } from './auth.service';
 import { AuthController } from './auth.controller';
-import { TokenCleanupService } from './services/token-cleanup.service';
 import { SupabaseModule } from '../../libs/supabase/supabase.module';
 import { ExtractJwt } from 'passport-jwt';
 import { SupabaseAuthStrategy } from './strategies/supabase.strategy';
@@ -49,7 +48,6 @@ import { JwtAuthGuard } from './guards/jwt-auth.guard';
   controllers: [AuthController],
   providers: [
     AuthService,
-    TokenCleanupService,
     Logger,
     JwtStrategy,
     JwtAuthGuard,

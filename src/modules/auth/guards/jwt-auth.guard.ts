@@ -1,34 +1,40 @@
 import { Injectable, CanActivate, ExecutionContext, UnauthorizedException } from '@nestjs/common';
-import { AuthGuard } from '@nestjs/passport';
-import { Reflector } from '@nestjs/core';
-import { IS_PUBLIC_KEY } from '../../common/decorators/public.decorator';
+import { ConfigService } from '@nestjs/config';
+import * as jwt from 'jsonwebtoken';
+import { PrismaService } from 'src/libs/supabase/db/prisma.service';
 
 @Injectable()
-export class JwtAuthGuard extends AuthGuard('jwt') implements CanActivate {
-  constructor(private reflector: Reflector) {
-    super();
-  }
+export class JwtAuthGuard implements CanActivate {
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly configService: ConfigService,
+  ) {}
 
-  canActivate(context: ExecutionContext) {
-    // Check if route is marked as public
-    const isPublic = this.reflector.getAllAndOverride<boolean>(IS_PUBLIC_KEY, [
-      context.getHandler(),
-      context.getClass(),
-    ]);
+  async canActivate(context: ExecutionContext): Promise<boolean> {
+    const request = context.switchToHttp().getRequest();
+    const authHeader = request.headers['authorization'];
+    if (!authHeader) throw new UnauthorizedException('No auth header');
 
-    if (isPublic) {
+    const token = authHeader.split(' ')[1];
+
+    try {
+      const supabaseJwtSecret = this.configService.get<string>('SUPABASE_JWT_SECRET');
+      if (!supabaseJwtSecret) {
+        throw new Error('SUPABASE_JWT_SECRET is not configured');
+      }
+
+      const payload = jwt.verify(token, supabaseJwtSecret) as { sub: string }; // типизация важна
+
+      const user = await this.prisma.user.findUnique({
+        where: { supabaseId: payload.sub }, // или просто id, если совпадает
+      });
+
+      if (!user) throw new UnauthorizedException('User not found');
+
+      request.user = user; // кладём полноценного пользователя
       return true;
+    } catch (err) {
+      throw new UnauthorizedException('Invalid token');
     }
-
-    return super.canActivate(context);
-  }
-
-  handleRequest(err: any, user: any, info: any, context: ExecutionContext) {
-    if (err || !user) {
-      const errorMessage = info?.message || err?.message || 'Unauthorized access';
-      throw new UnauthorizedException(errorMessage);
-    }
-
-    return user;
   }
 }

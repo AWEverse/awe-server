@@ -560,16 +560,18 @@ export class AuthController {
   })
   async getSessions(@Request() req: UserRequest): Promise<SessionsResponse> {
     try {
-      this.logger.log(`Sessions request for user: ${req.user.id}`);
-      const sessions = await this.authService.getUserSessions(req.user.id);
-      const activeCount = await this.authService.getActiveTokensCount(req.user.id);
+      const userId = req.user?.id || req.user?.sub;
+      this.logger.log(`Sessions request for user: ${userId}`);
+      const sessions = await this.authService.getUserSessions(userId);
+      const activeCount = await this.authService.getActiveTokensCount(userId);
 
       return {
         sessions,
         activeCount,
       };
     } catch (error) {
-      this.logger.error(`Failed to get sessions for user ${req.user?.id}:`, error.message);
+      const userId = req.user?.id || req.user?.sub;
+      this.logger.error(`Failed to get sessions for user ${userId}:`, error.message);
       throw error;
     }
   }

@@ -8,12 +8,11 @@ export class PrismaService extends PrismaClient implements OnModuleInit, OnModul
 
   constructor(private configService: ConfigService) {
     super({
-      datasources:
-        {
-          db: {
-            url: process.env.DATABASE_URL,
-          },
+      datasources: {
+        db: {
+          url: process.env.DATABASE_URL,
         },
+      },
       // Оптимизированное логирование
       log:
         process.env.NODE_ENV === 'production'
@@ -24,6 +23,12 @@ export class PrismaService extends PrismaClient implements OnModuleInit, OnModul
               { emit: 'event', level: 'info' },
               { emit: 'event', level: 'warn' },
             ],
+      // Fix prepared statement conflicts
+      errorFormat: 'pretty',
+      transactionOptions: {
+        maxWait: 5000, // 5 seconds
+        timeout: 10000, // 10 seconds
+      },
     });
   }
 
@@ -51,23 +56,52 @@ export class PrismaService extends PrismaClient implements OnModuleInit, OnModul
 
   private async optimizeConnection() {
     try {
-      // Настройка оптимальных параметров для PostgreSQL
-      await this.$executeRaw`SET statement_timeout = '30s'`;
-      await this.$executeRaw`SET lock_timeout = '10s'`;
-      await this.$executeRaw`SET idle_in_transaction_session_timeout = '60s'`;
+      // Clear any existing prepared statements to avoid conflicts
+      await this.$executeRaw`DEALLOCATE ALL`;
 
-      // Оптимизация планировщика запросов
-      await this.$executeRaw`SET random_page_cost = 1.1`;
-      await this.$executeRaw`SET seq_page_cost = 1.0`;
-      await this.$executeRaw`SET cpu_tuple_cost = 0.01`;
-      await this.$executeRaw`SET effective_cache_size = '256MB'`;
+      // Безопасная настройка параметров с обработкой ошибок
+      const optimizations = [
+        { sql: `SET statement_timeout = '30s'` },
+        { sql: `SET lock_timeout = '10s'` },
+        { sql: `SET idle_in_transaction_session_timeout = '60s'` },
+        { sql: `SET random_page_cost = 1.1` },
+        { sql: `SET seq_page_cost = 1.0` },
+        { sql: `SET cpu_tuple_cost = 0.01` },
+        { sql: `SET effective_cache_size = '256MB'` },
+        { sql: `SET timezone = 'UTC'` },
+        { sql: `SET plan_cache_mode = 'auto'` },
+        { sql: `SET work_mem = '16MB'` },
+        { sql: `SET maintenance_work_mem = '64MB'` },
+      ];
 
-      // Настройка для работы с BigInt
-      await this.$executeRaw`SET timezone = 'UTC'`;
+      for (const opt of optimizations) {
+        try {
+          await this.$executeRawUnsafe(opt.sql);
+          this.logger.debug(`Successfully executed: ${opt.sql}`);
+        } catch (error: any) {
+          // Проверяем, требует ли параметр перезапуска сервера
+          if (error.message?.includes('cannot be changed without restarting the server')) {
+            this.logger.debug(`Parameter requires server restart, skipping: ${opt.sql}`);
+          } else {
+            this.logger.debug(`Failed to execute ${opt.sql}: ${error.message}`);
+          }
+          // Продолжаем выполнение других настроек
+        }
+      }
 
       this.logger.debug('Database connection optimized');
     } catch (error) {
       this.logger.warn('Failed to optimize database connection:', error);
+    }
+  }
+
+  // Handle prepared statement conflicts
+  private async handlePreparedStatementConflict() {
+    try {
+      await this.$executeRaw`DEALLOCATE ALL`;
+      this.logger.debug('Cleared all prepared statements');
+    } catch (error) {
+      this.logger.warn('Failed to clear prepared statements:', error);
     }
   }
 
@@ -80,6 +114,21 @@ export class PrismaService extends PrismaClient implements OnModuleInit, OnModul
         return await operation();
       } catch (error) {
         lastError = error as Error;
+
+        // Handle prepared statement conflicts specifically
+        if (
+          error.message?.includes('prepared statement') &&
+          error.message?.includes('already exists')
+        ) {
+          this.logger.warn(
+            `Prepared statement conflict on attempt ${attempt}, clearing statements...`,
+          );
+          await this.handlePreparedStatementConflict();
+
+          // Short delay before retry for prepared statement conflicts
+          await new Promise(resolve => setTimeout(resolve, 100));
+          continue;
+        }
 
         if (attempt === maxRetries) {
           this.logger.error(`Operation failed after ${maxRetries} attempts:`, error);
@@ -95,6 +144,24 @@ export class PrismaService extends PrismaClient implements OnModuleInit, OnModul
     }
 
     throw lastError!;
+  }
+
+  // Wrapper for database operations with prepared statement conflict handling
+  async safeQuery<T>(operation: () => Promise<T>): Promise<T> {
+    try {
+      return await operation();
+    } catch (error: any) {
+      if (
+        error.message?.includes('prepared statement') &&
+        error.message?.includes('already exists')
+      ) {
+        this.logger.warn('Prepared statement conflict detected, clearing and retrying...');
+        await this.handlePreparedStatementConflict();
+        // Retry the operation
+        return await operation();
+      }
+      throw error;
+    }
   }
 
   // Проверка здоровья соединения

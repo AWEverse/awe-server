@@ -174,7 +174,7 @@ enum ChatPermission {
 // ===== ОСНОВНЫЕ МОДЕЛИ =====
 
 model RoleGlobally {
-  id          Int      @id @default(autoincrement())
+  id          BigInt   @id @default(autoincrement())
   name        String   @unique @db.VarChar(32)
   flags       Int      @default(0) // founder(1), admin(2), moderator(4), verified(8)
   permissions Json?
@@ -209,7 +209,7 @@ model User {
   createdAt DateTime  @default(now()) @db.Timestamptz(3)
   updatedAt DateTime  @updatedAt @db.Timestamptz(3)
   deletedAt DateTime? @db.Timestamptz(3)
-  roleId    Int       @default(1)
+  roleId    BigInt    @default(1)
 
   // Полнотекстовый поиск (PostgreSQL tsvector для оптимального поиска)
   searchVector Unsupported("tsvector")?
@@ -1340,7 +1340,7 @@ model ForumCategory {
 model ForumCategoryPermission {
   id          BigInt   @id @default(autoincrement())
   categoryId  BigInt
-  roleId      Int
+  roleId      BigInt
   permissions BigInt   @default(0) // Битовая маска разрешений
   createdAt   DateTime @default(now()) @db.Timestamptz(3)
 

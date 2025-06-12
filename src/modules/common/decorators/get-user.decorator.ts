@@ -30,7 +30,7 @@ export const GetUser = createParamDecorator(
       return user;
     } // Handle special case for 'id' field - ensure it's a string compatible with Prisma
     if (data === 'sub' || data === 'id') {
-      return user.sub; // Return as string, not BigInt
+      return user.id; // Return as string, not BigInt
     }
 
     // Return the requested field

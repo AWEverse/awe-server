@@ -116,9 +116,11 @@ export class AuthService {
       }
 
       // Get user from database
-      const dbUser = await this.prisma.user.findUnique({
-        where: { email: email.toLowerCase() },
-        include: { role: true },
+      const dbUser = await this.prisma.safeQuery(async () => {
+        return await this.prisma.user.findUnique({
+          where: { email: email.toLowerCase() },
+          include: { role: true },
+        });
       });
 
       if (!dbUser) {
@@ -138,10 +140,12 @@ export class AuthService {
       );
 
       // Update last login
-      await this.prisma.user.update({
-        where: { id: dbUser.id },
-        data: { lastSeen: new Date() },
-      });
+      await this.prisma.safeQuery(() =>
+        this.prisma.user.update({
+          where: { id: dbUser.id },
+          data: { lastSeen: new Date() },
+        }),
+      );
 
       // Clear failed attempts
       this.failedAttempts.delete(email);
@@ -179,10 +183,12 @@ export class AuthService {
 
     try {
       // Check if refresh token exists in database and is not revoked
-      const tokenRecord = await this.prisma.refreshToken.findUnique({
-        where: { token: refreshToken },
-        include: { user: { include: { role: true } } },
-      });
+      const tokenRecord = await this.prisma.safeQuery(() =>
+        this.prisma.refreshToken.findUnique({
+          where: { token: refreshToken },
+          include: { user: { include: { role: true } } },
+        }),
+      );
 
       if (!tokenRecord || tokenRecord.isRevoked || new Date() > tokenRecord.expiresAt) {
         throw new UnauthorizedException('Invalid or expired refresh token');
@@ -200,21 +206,23 @@ export class AuthService {
       }
 
       // Revoke old refresh token and store new one
-      await this.prisma.$transaction(async tx => {
-        // Revoke old token
-        await tx.refreshToken.update({
-          where: { id: tokenRecord.id },
-          data: { isRevoked: true },
-        });
+      await this.prisma.safeQuery(() =>
+        this.prisma.$transaction(async tx => {
+          // Revoke old token
+          await tx.refreshToken.update({
+            where: { id: tokenRecord.id },
+            data: { isRevoked: true },
+          });
 
-        // Store new refresh token
-        await this.storeRefreshToken(
-          tokenRecord.userId.toString(),
-          result.session!.refresh_token,
-          false,
-          tx,
-        );
-      });
+          // Store new refresh token
+          await this.storeRefreshToken(
+            tokenRecord.userId.toString(),
+            result.session!.refresh_token,
+            false,
+            tx,
+          );
+        }),
+      );
 
       this.logger.log(`Token refreshed successfully for user: ${tokenRecord.user.id}`);
 
@@ -253,13 +261,15 @@ export class AuthService {
 
       // Revoke refresh token in database if provided
       if (refreshToken) {
-        await this.prisma.refreshToken.updateMany({
-          where: {
-            token: refreshToken,
-            isRevoked: false,
-          },
-          data: { isRevoked: true },
-        });
+        await this.prisma.safeQuery(() =>
+          this.prisma.refreshToken.updateMany({
+            where: {
+              token: refreshToken,
+              isRevoked: false,
+            },
+            data: { isRevoked: true },
+          }),
+        );
       }
 
       // Sign out from Supabase
@@ -417,11 +427,13 @@ export class AuthService {
 
   async cleanupExpiredTokens(): Promise<void> {
     try {
-      const result = await this.prisma.refreshToken.deleteMany({
-        where: {
-          OR: [{ expiresAt: { lte: new Date() } }, { isRevoked: true }],
-        },
-      });
+      const result = await this.prisma.safeQuery(() =>
+        this.prisma.refreshToken.deleteMany({
+          where: {
+            OR: [{ expiresAt: { lte: new Date() } }, { isRevoked: true }],
+          },
+        }),
+      );
 
       if (result.count > 0) {
         this.logger.log(`Cleaned up ${result.count} expired/revoked refresh tokens`);
@@ -433,13 +445,15 @@ export class AuthService {
 
   async revokeAllUserTokens(userId: string): Promise<void> {
     try {
-      await this.prisma.refreshToken.updateMany({
-        where: {
-          userId: BigInt(userId),
-          isRevoked: false,
-        },
-        data: { isRevoked: true },
-      });
+      await this.prisma.safeQuery(() =>
+        this.prisma.refreshToken.updateMany({
+          where: {
+            userId: BigInt(userId),
+            isRevoked: false,
+          },
+          data: { isRevoked: true },
+        }),
+      );
 
       this.logger.log(`Revoked all tokens for user: ${userId}`);
     } catch (error) {
@@ -450,13 +464,15 @@ export class AuthService {
 
   async getActiveTokensCount(userId: string): Promise<number> {
     try {
-      const count = await this.prisma.refreshToken.count({
-        where: {
-          userId: BigInt(userId),
-          isRevoked: false,
-          expiresAt: { gt: new Date() },
-        },
-      });
+      const count = await this.prisma.safeQuery(() =>
+        this.prisma.refreshToken.count({
+          where: {
+            userId: BigInt(userId),
+            isRevoked: false,
+            expiresAt: { gt: new Date() },
+          },
+        }),
+      );
       return count;
     } catch (error) {
       this.logger.error(`Failed to get active tokens count for user ${userId}:`, error.message);
@@ -466,22 +482,24 @@ export class AuthService {
 
   async getUserSessions(userId: string) {
     try {
-      const sessions = await this.prisma.refreshToken.findMany({
-        where: {
-          userId: BigInt(userId),
-          isRevoked: false,
-          expiresAt: { gt: new Date() },
-        },
-        select: {
-          id: true,
-          createdAt: true,
-          expiresAt: true,
-          deviceId: true,
-          ipAddress: true,
-          userAgent: true,
-        },
-        orderBy: { createdAt: 'desc' },
-      });
+      const sessions = await this.prisma.safeQuery(() =>
+        this.prisma.refreshToken.findMany({
+          where: {
+            userId: BigInt(userId),
+            isRevoked: false,
+            expiresAt: { gt: new Date() },
+          },
+          select: {
+            id: true,
+            createdAt: true,
+            expiresAt: true,
+            deviceId: true,
+            ipAddress: true,
+            userAgent: true,
+          },
+          orderBy: { createdAt: 'desc' },
+        }),
+      );
 
       return sessions.map(session => ({
         ...session,
@@ -495,14 +513,16 @@ export class AuthService {
 
   async revokeSession(userId: string, sessionId: string): Promise<boolean> {
     try {
-      const result = await this.prisma.refreshToken.updateMany({
-        where: {
-          id: BigInt(sessionId),
-          userId: BigInt(userId),
-          isRevoked: false,
-        },
-        data: { isRevoked: true },
-      });
+      const result = await this.prisma.safeQuery(() =>
+        this.prisma.refreshToken.updateMany({
+          where: {
+            id: BigInt(sessionId),
+            userId: BigInt(userId),
+            isRevoked: false,
+          },
+          data: { isRevoked: true },
+        }),
+      );
 
       return result.count > 0;
     } catch (error) {
