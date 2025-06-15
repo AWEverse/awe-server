@@ -328,8 +328,8 @@ model Device {
 
 model Session {
   id           BigInt    @id @default(autoincrement())
-  userId       BigInt    @unique
-  deviceId     BigInt    @unique
+  userId       BigInt
+  deviceId     BigInt
   ratchetState Bytes
   sessionKey   String?   @db.VarChar(256)
   expiresAt    DateTime? @db.Timestamptz(3)
