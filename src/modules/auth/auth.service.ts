@@ -191,22 +191,26 @@ export class AuthService {
 
             // SECURITY: Ensure only one session per device
             // Store Supabase refresh token in our database for tracking
-            if (refreshToken && device) {
+            if (refreshToken && device && session) {
               try {
-                // Отозвать все существующие токены для этого устройства для обеспечения одной сессии (если есть)
-                await tx.refreshToken.updateMany({
+                // Сначала удалить все существующие refresh токены для этого устройства (by deviceId)
+                await tx.refreshToken.deleteMany({
                   where: {
-                    userId: newUser.id,
                     deviceId: device.deviceId,
-                    isRevoked: false,
                   },
-                  data: { isRevoked: true },
+                });
+
+                // Также удалить все существующие refresh токены для этой сессии
+                await tx.refreshToken.deleteMany({
+                  where: {
+                    sessionId: session.id,
+                  },
                 });
 
                 await tx.refreshToken.create({
                   data: {
                     userId: newUser.id,
-                    sessionId: session?.id || null,
+                    sessionId: session.id,
                     token: refreshToken,
                     tokenHash: Buffer.from(blake3(refreshToken)).toString('hex'),
                     expiresAt: new Date(Date.now() + this.tokenLifetimes.refreshTokenMs),
@@ -440,23 +444,27 @@ export class AuthService {
 
             // SECURITY: Ensure only one session per device
             // Store/update Supabase refresh token in our database
-            if (refreshToken && device) {
+            if (refreshToken && device && session) {
               try {
-                // Отозвать все существующие токены для этого устройства для обеспечения одной сессии
-                await tx.refreshToken.updateMany({
+                // Сначала удалить все существующие refresh токены для этого устройства (by deviceId)
+                await tx.refreshToken.deleteMany({
                   where: {
-                    userId: dbUser.id,
                     deviceId: device.deviceId,
-                    isRevoked: false,
                   },
-                  data: { isRevoked: true },
+                });
+
+                // Также удалить все существующие refresh токены для этой сессии
+                await tx.refreshToken.deleteMany({
+                  where: {
+                    sessionId: session.id,
+                  },
                 });
 
                 // Создать новый токен для новой сессии
                 await tx.refreshToken.create({
                   data: {
                     userId: dbUser.id,
-                    sessionId: session?.id || null,
+                    sessionId: session.id,
                     token: refreshToken,
                     tokenHash: Buffer.from(blake3(refreshToken)).toString('hex'),
                     expiresAt: new Date(Date.now() + this.tokenLifetimes.refreshTokenMs),
@@ -565,6 +573,11 @@ export class AuthService {
         await tx.refreshToken.update({
           where: { id: tokenRecord.id },
           data: { isUsed: true },
+        });
+
+        // Delete the old token to avoid unique constraint conflicts
+        await tx.refreshToken.delete({
+          where: { id: tokenRecord.id },
         });
 
         // Generate new refresh token
@@ -1337,6 +1350,23 @@ export class AuthService {
   ): Promise<{ deactivatedSessions: number; revokedTokens: number }> {
     const tx = transaction || this.prisma;
 
+    // Получить deviceId (string) для этого устройства
+    const device = await tx.device.findUnique({
+      where: { id: deviceId },
+      select: { deviceId: true },
+    });
+
+    if (!device) {
+      return { deactivatedSessions: 0, revokedTokens: 0 };
+    }
+
+    // Сначала удалить все refresh токены для этого устройства (by deviceId string)
+    const deviceTokensResult = await tx.refreshToken.deleteMany({
+      where: {
+        deviceId: device.deviceId,
+      },
+    });
+
     // Найти все активные сессии для этого устройства
     const oldSessions = await tx.session.findMany({
       where: {
@@ -1348,37 +1378,37 @@ export class AuthService {
     });
 
     if (oldSessions.length === 0) {
-      return { deactivatedSessions: 0, revokedTokens: 0 };
+      return { deactivatedSessions: 0, revokedTokens: deviceTokensResult.count };
     }
 
     const sessionIds = oldSessions.map(s => s.id);
 
-    // Сначала отозвать все refresh токены для этих сессий
-    const tokensResult = await tx.refreshToken.updateMany({
+    // Затем удалить refresh токены для этих сессий (если остались)
+    const sessionTokensResult = await tx.refreshToken.deleteMany({
       where: {
         sessionId: { in: sessionIds },
-        isRevoked: false,
       },
-      data: { isRevoked: true },
     });
 
-    // Затем удалить сессии полностью (каскадное удаление удалит связанные RefreshToken)
+    // Затем удалить сессии полностью
     const sessionsResult = await tx.session.deleteMany({
       where: {
         id: { in: sessionIds },
       },
     });
 
-    if (sessionsResult.count > 0 || tokensResult.count > 0) {
+    const totalRevokedTokens = deviceTokensResult.count + sessionTokensResult.count;
+
+    if (sessionsResult.count > 0 || totalRevokedTokens > 0) {
       this.logger.log(
         `Device session cleanup for user ${userId}, device ${deviceId}: ` +
-          `${sessionsResult.count} sessions deleted, ${tokensResult.count} tokens revoked`,
+          `${sessionsResult.count} sessions deleted, ${totalRevokedTokens} tokens deleted`,
       );
     }
 
     return {
       deactivatedSessions: sessionsResult.count,
-      revokedTokens: tokensResult.count,
+      revokedTokens: totalRevokedTokens,
     };
   }
 
