@@ -129,7 +129,7 @@ export class AuthController {
   }
   @Post('login')
   @Public()
-  @UseGuards(RateLimitGuard)
+  // @UseGuards(RateLimitGuard)
   @UsePipes(new ValidationPipe({ whitelist: true, transform: true }))
   @HttpCode(HttpStatus.OK)
   @ApiPublicEndpoint(
