@@ -1598,7 +1598,7 @@ model Report {
 model RefreshToken {
   id        BigInt   @id @default(autoincrement())
   sessionId BigInt
-  userId    BigInt   @unique
+  userId    BigInt
   token     String   @unique @db.VarChar(255)
   tokenHash String   @unique @db.VarChar(255) // Хеш токена для безопасности
   expiresAt DateTime @db.Timestamptz(3)
