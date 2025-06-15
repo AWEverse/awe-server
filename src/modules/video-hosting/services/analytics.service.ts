@@ -1,5 +1,5 @@
 import { Injectable } from '@nestjs/common';
-import { ContentType, ContentStatus } from '@prisma/client';
+import { ContentType, ContentStatus } from 'generated/client';
 import { PrismaService } from 'src/libs/db/prisma.service';
 import { AnalyticsData, TopVideoData } from '../types';
 

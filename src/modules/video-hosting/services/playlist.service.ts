@@ -1,6 +1,6 @@
 import { Injectable, NotFoundException, ForbiddenException } from '@nestjs/common';
 import { CreatePlaylistDto, UpdatePlaylistDto, AddToPlaylistDto } from '../dto/playlist.dto';
-import { Playlist } from '@prisma/client';
+import { Playlist } from 'generated/client';
 import { PrismaService } from 'src/libs/db/prisma.service';
 
 @Injectable()

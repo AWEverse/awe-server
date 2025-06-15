@@ -11,7 +11,7 @@ import {
 } from 'class-validator';
 import { Type } from 'class-transformer';
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
-import { ContentType, ContentStatus } from '@prisma/client';
+import { ContentType, ContentStatus } from 'generated/client';
 
 /**
  * DTO для создания нового видео

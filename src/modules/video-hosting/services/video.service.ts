@@ -11,7 +11,7 @@ import {
   VideoInteractionDto,
 } from '../dto/video.dto';
 import { VideoMetadata, VideoProcessingStatus, VideoStats, VideoSearchFilters } from '../types';
-import { ContentType, ContentStatus, User, Content } from '@prisma/client';
+import { ContentType, ContentStatus, User, Content } from 'generated/client';
 import { PrismaService } from 'src/libs/db/prisma.service';
 
 @Injectable()

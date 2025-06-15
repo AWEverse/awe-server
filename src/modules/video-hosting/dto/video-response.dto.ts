@@ -1,5 +1,5 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
-import { ContentStatus } from '@prisma/client';
+import { ContentStatus } from 'generated/client';
 
 /**
  * DTO для краткой информации об авторе видео
