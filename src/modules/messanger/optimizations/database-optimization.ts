@@ -1,6 +1,6 @@
 // Оптимизация базы данных и кэширования
 import { Injectable, Logger } from '@nestjs/common';
-import { PrismaService } from '../../../libs/supabase/db/prisma.service';
+import { PrismaService } from '../../../libs/db/prisma.service';
 import { Prisma } from 'generated/client';
 import Redis from 'ioredis';
 

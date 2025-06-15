@@ -1,5 +1,5 @@
 import { Injectable, NotFoundException, BadRequestException } from '@nestjs/common';
-import { PrismaService } from '../../../libs/supabase/db/prisma.service';
+import { PrismaService } from '../../../libs/db/prisma.service';
 import { UpdateSettingsDto, SettingsResponseDto } from './dto';
 
 @Injectable()

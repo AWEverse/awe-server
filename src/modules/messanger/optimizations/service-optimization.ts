@@ -2,7 +2,7 @@
 import { Injectable, Logger, BadRequestException } from '@nestjs/common';
 import { EventEmitter2 } from '@nestjs/event-emitter';
 import { DatabaseOptimizer } from './database-optimization';
-import { PrismaService } from '../../../libs/supabase/db/prisma.service';
+import { PrismaService } from '../../../libs/db/prisma.service';
 import { ChatInfo, MessageInfo, ChatType, MessageType } from '../types';
 
 interface BatchOperation<T> {

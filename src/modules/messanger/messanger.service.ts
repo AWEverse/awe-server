@@ -5,8 +5,7 @@ import {
   NotFoundException,
   Logger,
 } from '@nestjs/common';
-import { PrismaService } from '../../libs/supabase/db/prisma.service';
-import { IChatService } from './interfaces/chat.interface';
+import { PrismaService } from '../../libs/db/prisma.service';
 import {
   ChatInfo,
   ChatParticipantInfo,
@@ -26,15 +25,14 @@ import {
   UserInfo,
 } from './types';
 import { ChatStatistics, UserChatStatistics } from './types/statistics.type';
-import { MessangerRepository } from './messanger.repository';
 // High-performance optimizations
 import { MemoryCacheService } from '../common/cache/memory-cache.service';
+import { Prisma } from 'generated/client';
 
 @Injectable()
-export class MessangerService implements IChatService {
+export class MessangerService {
   constructor(
     private readonly prisma: PrismaService,
-    private readonly repo: MessangerRepository,
     private readonly cache: MemoryCacheService,
   ) {
     Logger.log('MessangerService initialized with cache');
@@ -166,24 +164,70 @@ export class MessangerService implements IChatService {
     totalUnread: number;
     chatUnreads: Array<{ chatId: bigint; unreadCount: number; lastMessageAt: Date }>;
   }> {
-    try {
-      const unreadData = await this.repo.getUnreadInfoRaw(userId);
+    const unreadMessages = await this.prisma.messageRead.findMany({
+      where: { userId, readAt: null },
+      select: {
+        message: {
+          select: { id: true, chatId: true, createdAt: true },
+        },
+      },
+    });
 
-      const chatUnreads = unreadData.map(item => ({
-        chatId: item.chat_id,
-        unreadCount: Number(item.unread_count),
-        lastMessageAt: item.last_message_at,
-      }));
-
-      const totalUnread = chatUnreads.reduce((sum, chat) => sum + chat.unreadCount, 0);
-
-      return {
-        totalUnread,
-        chatUnreads,
+    const grouped = new Map<bigint, { unreadCount: number; lastMessageAt: Date }>();
+    for (const { message } of unreadMessages) {
+      const current = grouped.get(message.chatId) || {
+        unreadCount: 0,
+        lastMessageAt: message.createdAt,
       };
-    } catch (error) {
-      throw new BadRequestException(`Failed to get unread info: ${error.message}`);
+
+      current.unreadCount++;
+
+      if (message.createdAt > current.lastMessageAt) {
+        current.lastMessageAt = message.createdAt;
+      }
+
+      grouped.set(message.chatId, current);
     }
+
+    return {
+      totalUnread: unreadMessages.length,
+      chatUnreads: Array.from(grouped, ([chatId, data]) => ({
+        chatId,
+        unreadCount: data.unreadCount,
+        lastMessageAt: data.lastMessageAt,
+      })),
+    };
+  }
+
+  async createChatFolder(data: Prisma.ChatFolderCreateInput) {
+    return this.prisma.chatFolder.create({ data });
+  }
+
+  async getChatFolderById(id: number) {
+    return this.prisma.chatFolder.findUnique({ where: { id } });
+  }
+
+  async updateChatFolder(id: number, data: Prisma.ChatFolderUpdateInput) {
+    return this.prisma.chatFolder.update({ where: { id }, data });
+  }
+
+  async deleteChatFolder(id: number) {
+    return this.prisma.chatFolder.delete({ where: { id } });
+  }
+
+  async addChatToFolder(data: Prisma.ChatFolderItemCreateInput) {
+    return this.prisma.chatFolderItem.create({ data });
+  }
+
+  async removeChatFromFolder(id: number) {
+    return this.prisma.chatFolderItem.delete({ where: { id } });
+  }
+
+  async getChatsInFolder(folderId: number) {
+    return this.prisma.chatFolderItem.findMany({
+      where: { folderId },
+      include: { chat: true },
+    });
   }
 
   async searchMessages(
@@ -298,72 +342,50 @@ export class MessangerService implements IChatService {
     isPublic: boolean = false,
     inviteLink?: string,
   ): Promise<ChatInfo> {
-    try {
-      const result = await this.prisma.$transaction(async tx => {
-        // 1. Create the chat with only the owner
-        const chat = await tx.chat.create({
-          data: {
-            title,
-            description,
-            type,
-            inviteLink,
-            flags: isPublic ? ChatFlags.PUBLIC : ChatFlags.PRIVATE,
-            createdBy: { connect: { id: userId } },
+    return this.prisma.$transaction(async tx => {
+      // Create chat and owner participant in one go
+      const chat = await tx.chat.create({
+        data: {
+          title,
+          description,
+          type,
+          inviteLink,
+          flags: isPublic ? ChatFlags.PUBLIC : ChatFlags.PRIVATE,
+          createdBy: { connect: { id: userId } },
+          participants: {
+            create: { userId, role: 'OWNER', joinedAt: new Date() },
           },
-        });
-
-        // 2. Add the owner as a ChatParticipant with role OWNER
-        await tx.chatParticipant.create({
-          data: {
-            chatId: chat.id,
-            userId: userId,
-            role: 'OWNER',
-            joinedAt: new Date(),
-          },
-        });
-
-        // 3. Add other participants as ChatParticipant with role MEMBER
-        if (participantIds && participantIds.length > 0) {
-          const uniqueIds = Array.from(new Set(participantIds.filter(id => id !== userId)));
-          if (uniqueIds.length > 0) {
-            await tx.chatParticipant.createMany({
-              data: uniqueIds.map(pid => ({
-                chatId: chat.id,
-                userId: pid,
-                role: 'MEMBER',
-                joinedAt: new Date(),
-              })),
-              skipDuplicates: true,
-            });
-          }
-        }
-
-        // 4. Return the chat info with creator
-        const chatWithCreator = await tx.chat.findUnique({
-          where: { id: chat.id },
-          include: {
-            createdBy: {
-              select: {
-                id: true,
-                username: true,
-                fullName: true,
-                avatarUrl: true,
-                flags: true,
-                lastSeen: true,
-              },
+        },
+        include: {
+          createdBy: {
+            select: {
+              id: true,
+              username: true,
+              fullName: true,
+              avatarUrl: true,
+              flags: true,
+              lastSeen: true,
             },
           },
-        });
-        if (!chatWithCreator) {
-          throw new NotFoundException('Chat not found after creation');
-        }
-        return chatWithCreator;
+        },
       });
 
-      return this.formatChatInfo(result);
-    } catch (error) {
-      throw new BadRequestException(`Failed to create chat: ${error.message}`);
-    }
+      // Add other participants
+      const uniqueIds = [...new Set(participantIds.filter(id => id !== userId))];
+      if (uniqueIds.length > 0) {
+        await tx.chatParticipant.createMany({
+          data: uniqueIds.map(pid => ({
+            chatId: chat.id,
+            userId: pid,
+            role: 'MEMBER',
+            joinedAt: new Date(),
+          })),
+          skipDuplicates: true,
+        });
+      }
+
+      return this.formatChatInfo(chat);
+    });
   }
 
   async getChatInfo(chatId: bigint, userId: bigint): Promise<ChatInfo> {
@@ -469,18 +491,24 @@ export class MessangerService implements IChatService {
   ): Promise<ChatInfo[]> {
     const limit = options?.limit ?? 50;
     const offset = options?.offset ?? 0;
-    const chats = await this.repo.getUserChatsRaw(
-      userId,
-      limit,
-      offset,
-      options?.chatType,
-      options?.searchQuery,
-      options?.onlyUnread,
-    );
 
-    const chatIds = chats.map(chat => chat.chat_id);
-    const chatCreators = await this.prisma.chat.findMany({
-      where: { id: { in: chatIds } },
+    const chats = await this.prisma.chat.findMany({
+      where: {
+        participants: {
+          some: {
+            userId,
+            ...(options?.onlyMuted && { isMuted: true }),
+            ...(options?.onlyUnread && { unreadCount: { gt: 0 } }),
+          },
+        },
+        ...(options?.chatType && { type: options.chatType }),
+        ...(options?.searchQuery && {
+          title: {
+            contains: options.searchQuery,
+            mode: 'insensitive',
+          },
+        }),
+      },
       include: {
         createdBy: {
           select: {
@@ -493,44 +521,19 @@ export class MessangerService implements IChatService {
           },
         },
       },
+      orderBy: {
+        lastMessageAt: 'desc',
+      },
+      skip: offset,
+      take: limit,
     });
-    const creatorsMap = new Map(chatCreators.map(chat => [chat.id, chat.createdBy]));
 
-    return chats.map(chat => {
-      const creator = creatorsMap.get(chat.chat_id);
-      const formattedCreator: UserInfo = creator
-        ? {
-            id: creator.id,
-            username: creator.username,
-            fullName: creator.fullName || undefined,
-            avatarUrl: creator.avatarUrl || undefined,
-            flags: creator.flags,
-            lastSeen: creator.lastSeen || undefined,
-          }
-        : {
-            id: BigInt(0),
-            username: 'unknown',
-            fullName: undefined,
-            avatarUrl: undefined,
-            flags: 0,
-            lastSeen: undefined,
-          };
+    if (chats.length === 0) {
+      throw new NotFoundException('No chats found for this user');
+    }
 
-      return {
-        id: chat.chat_id,
-        type: chat.chat_type as ChatType,
-        title: chat.title || undefined,
-        description: chat.description || undefined,
-        avatarUrl: chat.avatar_url || undefined,
-        flags: chat.flags || 0,
-        memberCount: chat.member_count || 0,
-        lastMessageAt: chat.last_message_at || undefined,
-        lastMessageText: chat.last_message_text || undefined,
-        inviteLink: undefined,
-        createdAt: chat.created_at,
-        createdBy: formattedCreator,
-      };
-    });
+    // Map chat info to local ChatInfo type
+    return chats.map(chat => this.formatChatInfo(chat));
   }
 
   async sendMessage(
@@ -597,50 +600,76 @@ export class MessangerService implements IChatService {
 
   async getChatMessages(
     chatId: bigint,
-    userId: bigint,
+    senderId: bigint,
     options?: {
       limit?: number;
-      offset?: number;
       beforeMessageId?: bigint;
       afterMessageId?: bigint;
       messageType?: MessageType;
-      searchQuery?: string;
     },
   ): Promise<PaginatedMessages> {
     const limit = options?.limit ?? 50;
-    const offset = options?.offset ?? 0;
-    const messages = await this.repo.getChatMessagesRaw(
+
+    const whereClause: Prisma.MessageWhereInput = {
       chatId,
-      userId,
-      limit,
-      offset,
-      options?.beforeMessageId,
-      options?.afterMessageId,
-      options?.messageType,
-      options?.searchQuery,
-    );
+      senderId,
+      deletedAt: null, // если вы не хотите показывать удалённые сообщения
+      ...(options?.beforeMessageId && { id: { lt: options.beforeMessageId } }),
+      ...(options?.afterMessageId && { id: { gt: options.afterMessageId } }),
+      ...(options?.messageType && { messageType: options.messageType }),
+    };
+
+    const messages = await this.prisma.message.findMany({
+      where: whereClause,
+      orderBy: {
+        createdAt: 'desc',
+      },
+      take: limit,
+      select: {
+        id: true,
+        chatId: true,
+        senderId: true,
+        header: true,
+        content: true,
+        messageType: true,
+        flags: true,
+        createdAt: true,
+        updatedAt: true,
+        editedAt: true,
+        replyToId: true,
+        threadId: true,
+        sender: {
+          select: {
+            id: true,
+            username: true,
+            fullName: true,
+            avatarUrl: true,
+          },
+        },
+      },
+    });
 
     const formattedMessages: MessageInfo[] = messages.map(msg => ({
-      id: msg.message_id,
-      chatId: chatId,
-      senderId: msg.sender_id,
+      id: msg.id,
+      chatId: msg.chatId,
+      senderId: msg.senderId,
       content: Buffer.from(msg.content),
-      header: Buffer.alloc(0),
-      messageType: msg.message_type as MessageType,
+      header: Buffer.from(msg.header),
+      messageType: msg.messageType as MessageType,
       flags: msg.flags,
-      createdAt: msg.created_at,
-      updatedAt: msg.updated_at,
-      editedAt: msg.edited_at || undefined,
+      createdAt: msg.createdAt,
+      updatedAt: msg.updatedAt,
+      editedAt: msg.editedAt ?? undefined,
       deletedAt: undefined,
-      replyToId: msg.reply_to_message_id || undefined,
+      replyToId: msg.replyToId ?? undefined,
       forwardedFromId: undefined,
-      threadId: msg.thread_id || undefined,
+      threadId: msg.threadId ?? undefined,
       replyDepth: 0,
       sender: {
-        id: msg.sender_id,
-        username: msg.sender_username,
-        fullName: msg.sender_full_name || undefined,
-        avatarUrl: msg.sender_avatar_url || undefined,
+        id: msg.sender.id,
+        username: msg.sender.username,
+        fullName: msg.sender.fullName ?? undefined,
+        avatarUrl: msg.sender.avatarUrl ?? undefined,
         flags: 0,
         lastSeen: undefined,
       },
@@ -649,32 +678,16 @@ export class MessangerService implements IChatService {
       reactions: [],
     }));
 
-    // Группировка сообщений по датам как в Telegram
     const groupedMessages = this.groupMessagesByTime(formattedMessages);
 
     return {
       messagesGroups: groupedMessages,
       hasMore: formattedMessages.length === limit,
-      nextCursor: formattedMessages.length === limit ? String(offset + limit) : undefined,
+      nextCursor:
+        formattedMessages.length === limit
+          ? String(Number(messages[messages.length - 1].id))
+          : undefined,
     };
-  }
-
-  /**
-   * Alias for getChatMessages to maintain backward compatibility
-   */
-  async getMessages(
-    chatId: bigint,
-    userId: bigint,
-    options?: {
-      limit?: number;
-      offset?: number;
-      beforeMessageId?: bigint;
-      afterMessageId?: bigint;
-      messageType?: MessageType;
-      searchQuery?: string;
-    },
-  ): Promise<PaginatedMessages> {
-    return this.getChatMessages(chatId, userId, options);
   }
 
   async getChatParticipants(
@@ -688,29 +701,40 @@ export class MessangerService implements IChatService {
   ): Promise<ChatParticipantInfo[]> {
     const limit = options?.limit ?? 100;
     const offset = options?.offset ?? 0;
-    const participants = await this.repo.getChatParticipantsRaw(
-      chatId,
-      userId,
-      limit,
-      offset,
-      options?.role,
-    );
+    const participants = await this.prisma.chatParticipant.findMany({
+      where: {
+        chatId,
+        userId: userId,
+      },
+      take: limit,
+      skip: offset,
+      include: {
+        user: {
+          select: {
+            id: true,
+            username: true,
+            fullName: true,
+            avatarUrl: true,
+            flags: true,
+            lastSeen: true,
+          },
+        },
+      },
+    });
+
+    if (participants.length === 0) {
+      throw new NotFoundException('No participants found for this chat');
+    }
+
+    // Map role to local ChatRole enum to fix type incompatibility
     return participants.map(p => ({
-      id: BigInt(0),
-      chatId: chatId,
-      userId: p.user_id,
+      ...p,
       role: p.role as ChatRole,
-      flags: p.flags,
-      joinedAt: p.joined_at,
-      leftAt: undefined,
-      mutedUntil: undefined,
       user: {
-        id: p.user_id,
-        username: p.username,
-        fullName: p.full_name || undefined,
-        avatarUrl: p.avatar_url || undefined,
-        flags: 0,
-        lastSeen: p.last_seen || undefined,
+        ...p.user,
+        fullName: p.user.fullName ?? undefined,
+        avatarUrl: p.user.avatarUrl ?? undefined,
+        lastSeen: p.user.lastSeen ?? undefined,
       },
     }));
   }
@@ -821,23 +845,45 @@ export class MessangerService implements IChatService {
   ): Promise<ChatInfo[]> {
     const limit = options?.limit ?? 20;
     const offset = options?.offset ?? 0;
-    const results = await this.repo.searchChatsRaw(
-      userId,
-      query,
-      limit,
-      offset,
-      options?.chatType,
-      options?.publicOnly,
-    );
+    const results = await this.prisma.chat.findMany({
+      where: {
+        participants: {
+          some: { userId, leftAt: undefined },
+        },
+        deletedAt: undefined,
+        ...(options?.chatType && { type: options.chatType }),
+        ...(options?.publicOnly && { flags: ChatFlags.PUBLIC }),
+        OR: [
+          { title: { contains: query, mode: 'insensitive' } },
+          { description: { contains: query, mode: 'insensitive' } },
+        ],
+      },
+      take: limit,
+      skip: offset,
+      orderBy: { updatedAt: 'desc' },
+      select: {
+        id: true,
+        type: true,
+        title: true,
+        color: true,
+        description: true,
+        avatarUrl: true,
+        flags: true,
+        memberCount: true,
+        lastMessageAt: true,
+        lastMessageText: true,
+        createdAt: true,
+      },
+    });
 
     return results.map(chat => ({
-      id: chat.chat_id,
-      type: chat.chat_type as ChatType,
-      title: chat.title,
-      description: chat.description,
-      avatarUrl: chat.avatar_url,
+      id: chat.id,
+      type: chat.type as ChatType,
+      title: chat.title ?? undefined,
+      description: chat.description ?? undefined,
+      avatarUrl: chat.avatarUrl ?? undefined,
       flags: 0,
-      memberCount: chat.member_count,
+      memberCount: chat.memberCount,
       lastMessageAt: undefined,
       lastMessageText: undefined,
       inviteLink: undefined,
@@ -957,6 +1003,7 @@ export class MessangerService implements IChatService {
       },
     };
   }
+
   private formatMessageInfo(message: any): MessageInfo {
     return {
       id: message.id,
@@ -1186,6 +1233,15 @@ export class MessangerService implements IChatService {
     return true;
   }
 
+  async getPinnedMessage(chatId: bigint, userId: bigint): Promise<MessageInfo | null> {
+    const chat = await this.prisma.chat.findUnique({
+      where: { id: chatId },
+      include: { pinnedMessage: { include: { sender: true, attachments: true, reactions: true } } },
+    });
+    if (!chat?.pinnedMessage) return null;
+    return this.formatMessageInfo(chat.pinnedMessage);
+  }
+
   async getPinnedMessages(chatId: bigint, userId: bigint): Promise<MessageInfo[]> {
     const chat = await this.prisma.chat.findUnique({
       where: { id: chatId },
@@ -1252,6 +1308,7 @@ export class MessangerService implements IChatService {
     });
     return true;
   }
+
   async joinChatByInvite(inviteCode: string, userId: bigint): Promise<ChatInfo> {
     const chat = await this.prisma.chat.findFirst({
       where: { inviteLink: inviteCode, deletedAt: undefined },
@@ -1393,8 +1450,7 @@ export class MessangerService implements IChatService {
     return this.getUserStatistics(userId, userId);
   }
 
-  // Исправление: корректная типизация UserInfo для reactions
-  async getMessageReactions(messageId: bigint, userId: bigint): Promise<MessageReaction[]> {
+  async getMessageReactions(messageId: bigint): Promise<MessageReaction[]> {
     const reactions = await this.prisma.messageReaction.findMany({
       where: { messageId },
       include: { user: true },
@@ -1444,6 +1500,7 @@ export class MessangerService implements IChatService {
     }
     return { affected, errors };
   }
+
   async setSlowMode(
     chatId: bigint,
     moderatorId: bigint,
@@ -1471,6 +1528,7 @@ export class MessangerService implements IChatService {
     });
     return deleted.count;
   }
+
   async checkUserPermissions(
     chatId: bigint,
     userId: bigint,
@@ -1507,6 +1565,7 @@ export class MessangerService implements IChatService {
       return Object.fromEntries(permissions.map(p => [p, false]));
     }
   }
+
   async archiveOldMessages(
     chatId: bigint,
     beforeDate: Date,
@@ -1645,8 +1704,9 @@ export class MessangerService implements IChatService {
     // Permission matrix based on role
     switch (role) {
       case ChatRole.OWNER:
-        return true; // Owners have all permissions      case ChatRole.ADMIN:
-        // Admins have most permissions except some owner-only ones
+        return true; // Owners have all permissions
+
+      case ChatRole.ADMIN:
         const adminDeniedPermissions = ['DELETE_CHAT', 'TRANSFER_OWNERSHIP'];
         return !adminDeniedPermissions.includes(permission);
 
@@ -1673,7 +1733,7 @@ export class MessangerService implements IChatService {
     }
   }
 
-  groupMessagesByTime(messages: MessageInfo[]): { [key: string]: MessageInfo[] } {
+  private groupMessagesByTime(messages: MessageInfo[]): { [key: string]: MessageInfo[] } {
     const ONE_MINUTE = 60 * 1000;
     const TWO_MINUTES = 2 * ONE_MINUTE;
     const ONE_DAY = 24 * 60 * 60 * 1000;

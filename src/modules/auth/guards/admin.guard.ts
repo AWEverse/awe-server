@@ -1,5 +1,5 @@
 import { Injectable, CanActivate, ExecutionContext, ForbiddenException } from '@nestjs/common';
-import { PrismaService } from '../../../libs/supabase/db/prisma.service';
+import { PrismaService } from '../../../libs/db/prisma.service';
 
 @Injectable()
 export class AdminGuard implements CanActivate {
@@ -19,7 +19,7 @@ export class AdminGuard implements CanActivate {
       include: { role: true },
     });
 
-    if (!dbUser || dbUser.role.name !== 'ADMIN') {
+    if (!dbUser || !dbUser.role || dbUser.role.name !== 'ADMIN') {
       throw new ForbiddenException('Admin access required');
     }
 

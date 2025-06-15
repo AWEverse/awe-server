@@ -133,6 +133,7 @@ exports.Prisma.UserScalarFieldEnum = {
   id: 'id',
   email: 'email',
   username: 'username',
+  password: 'password',
   supabaseId: 'supabaseId',
   fullName: 'fullName',
   bio: 'bio',
@@ -167,6 +168,7 @@ exports.Prisma.DeviceScalarFieldEnum = {
   deviceVersion: 'deviceVersion',
   ipAddress: 'ipAddress',
   userAgent: 'userAgent',
+  fingerprint: 'fingerprint',
   flags: 'flags',
   lastUsed: 'lastUsed',
   createdAt: 'createdAt',
@@ -789,15 +791,18 @@ exports.Prisma.ReportScalarFieldEnum = {
 
 exports.Prisma.RefreshTokenScalarFieldEnum = {
   id: 'id',
+  sessionId: 'sessionId',
   userId: 'userId',
   token: 'token',
+  tokenHash: 'tokenHash',
   expiresAt: 'expiresAt',
   createdAt: 'createdAt',
   updatedAt: 'updatedAt',
   deviceId: 'deviceId',
   ipAddress: 'ipAddress',
   userAgent: 'userAgent',
-  isRevoked: 'isRevoked'
+  isRevoked: 'isRevoked',
+  isUsed: 'isUsed'
 };
 
 exports.Prisma.RefreshTokenBlacklistScalarFieldEnum = {
@@ -1031,6 +1036,7 @@ exports.Prisma.RoleGloballyOrderByRelevanceFieldEnum = {
 exports.Prisma.UserOrderByRelevanceFieldEnum = {
   email: 'email',
   username: 'username',
+  password: 'password',
   supabaseId: 'supabaseId',
   fullName: 'fullName',
   bio: 'bio',
@@ -1048,7 +1054,8 @@ exports.Prisma.DeviceOrderByRelevanceFieldEnum = {
   deviceType: 'deviceType',
   deviceVersion: 'deviceVersion',
   ipAddress: 'ipAddress',
-  userAgent: 'userAgent'
+  userAgent: 'userAgent',
+  fingerprint: 'fingerprint'
 };
 
 exports.Prisma.SessionOrderByRelevanceFieldEnum = {
@@ -1242,6 +1249,7 @@ exports.Prisma.ReportOrderByRelevanceFieldEnum = {
 
 exports.Prisma.RefreshTokenOrderByRelevanceFieldEnum = {
   token: 'token',
+  tokenHash: 'tokenHash',
   deviceId: 'deviceId',
   ipAddress: 'ipAddress',
   userAgent: 'userAgent'

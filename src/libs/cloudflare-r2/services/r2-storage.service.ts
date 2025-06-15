@@ -1,4 +1,9 @@
-import { Injectable, Logger, BadRequestException } from '@nestjs/common';
+/**
+ * Основной сервис для работы с R2 хранилищем
+ * Рефакторинг: выделение ответственностей, строгая типизация, безопасность
+ */
+
+import { Injectable, Logger } from '@nestjs/common';
 import {
   PutObjectCommand,
   GetObjectCommand,
@@ -9,218 +14,46 @@ import {
 } from '@aws-sdk/client-s3';
 import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
 import * as mimeTypes from 'mime-types';
+
 import { R2ClientService } from '../client/r2-client.service';
+import { R2ConfigService } from './r2-config.service';
+import { R2FileValidationService } from './r2-file-validation.service';
+import { FileUtils } from '../utils/file.utils';
 import {
   R2UploadOptions,
   R2UploadResult,
   R2DeleteOptions,
+  R2DeleteResult,
   R2GetUrlOptions,
   R2ListOptions,
   R2ListResult,
   R2MetadataResult,
+  R2CopyOptions,
   R2BucketType,
   FileTypeConfig,
   UploadValidationResult,
+  R2StorageClass,
 } from '../types';
+import {
+  R2Error,
+  R2ErrorUtils,
+  R2ValidationError,
+  R2FileNotFoundError,
+  R2StorageError,
+} from '../exceptions/r2-errors';
 
 @Injectable()
 export class R2StorageService {
   private readonly logger = new Logger(R2StorageService.name);
 
-  // Конфигурация типов файлов из схемы
-  private readonly fileTypeConfigs: Record<string, FileTypeConfig> = {
-    // Аватары пользователей
-    avatar: {
-      bucket: R2BucketType.IMAGES,
-      allowedMimeTypes: ['image/jpeg', 'image/png', 'image/webp', 'image/gif'],
-      maxSize: 5 * 1024 * 1024, // 5MB
-      cacheControl: 'public, max-age=31536000', // 1 year
-    },
-
-    // Баннеры пользователей
-    banner: {
-      bucket: R2BucketType.IMAGES,
-      allowedMimeTypes: ['image/jpeg', 'image/png', 'image/webp'],
-      maxSize: 10 * 1024 * 1024, // 10MB
-      cacheControl: 'public, max-age=31536000',
-    },
-
-    // Видео контент
-    video: {
-      bucket: R2BucketType.VIDEOS,
-      allowedMimeTypes: [
-        'video/mp4',
-        'video/webm',
-        'video/ogg',
-        'video/avi',
-        'video/mov',
-        'video/wmv',
-        'video/flv',
-        'video/mkv',
-      ],
-      maxSize: 2 * 1024 * 1024 * 1024, // 2GB
-      cacheControl: 'public, max-age=604800', // 1 week
-    },
-
-    // Короткие видео
-    short_video: {
-      bucket: R2BucketType.VIDEOS,
-      allowedMimeTypes: ['video/mp4', 'video/webm'],
-      maxSize: 100 * 1024 * 1024, // 100MB
-      cacheControl: 'public, max-age=604800',
-    },
-
-    // Изображения в постах
-    image_post: {
-      bucket: R2BucketType.IMAGES,
-      allowedMimeTypes: ['image/jpeg', 'image/png', 'image/webp', 'image/gif'],
-      maxSize: 20 * 1024 * 1024, // 20MB
-      cacheControl: 'public, max-age=604800',
-    },
-
-    // Вложения в сообщениях
-    message_attachment: {
-      bucket: R2BucketType.DOCUMENTS,
-      allowedMimeTypes: [
-        'image/jpeg',
-        'image/png',
-        'image/webp',
-        'image/gif',
-        'video/mp4',
-        'video/webm',
-        'audio/mpeg',
-        'audio/wav',
-        'audio/ogg',
-        'application/pdf',
-        'text/plain',
-        'application/msword',
-        'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
-        'application/vnd.ms-excel',
-        'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
-        'application/zip',
-        'application/x-rar-compressed',
-      ],
-      maxSize: 50 * 1024 * 1024, // 50MB
-      cacheControl: 'private, max-age=86400', // 1 day
-    },
-
-    // Стикеры
-    sticker: {
-      bucket: R2BucketType.IMAGES,
-      allowedMimeTypes: ['image/png', 'image/webp'],
-      maxSize: 1 * 1024 * 1024, // 1MB
-      cacheControl: 'public, max-age=31536000',
-    },
-
-    // GIF файлы
-    gif: {
-      bucket: R2BucketType.IMAGES,
-      allowedMimeTypes: ['image/gif'],
-      maxSize: 10 * 1024 * 1024, // 10MB
-      cacheControl: 'public, max-age=31536000',
-    },
-
-    // Эмоджи
-    emoji: {
-      bucket: R2BucketType.IMAGES,
-      allowedMimeTypes: ['image/png', 'image/webp'],
-      maxSize: 512 * 1024, // 512KB
-      cacheControl: 'public, max-age=31536000',
-    },
-
-    // Голосовые сообщения
-    voice: {
-      bucket: R2BucketType.DOCUMENTS,
-      allowedMimeTypes: ['audio/ogg', 'audio/mpeg', 'audio/wav'],
-      maxSize: 10 * 1024 * 1024, // 10MB
-      cacheControl: 'private, max-age=86400',
-    },
-
-    // Аудио файлы
-    audio: {
-      bucket: R2BucketType.DOCUMENTS,
-      allowedMimeTypes: ['audio/mpeg', 'audio/wav', 'audio/ogg', 'audio/aac'],
-      maxSize: 100 * 1024 * 1024, // 100MB
-      cacheControl: 'public, max-age=604800',
-    },
-
-    // Документы
-    document: {
-      bucket: R2BucketType.DOCUMENTS,
-      allowedMimeTypes: [
-        'application/pdf',
-        'text/plain',
-        'application/msword',
-        'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
-        'application/vnd.ms-excel',
-        'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
-        'application/vnd.ms-powerpoint',
-        'application/vnd.openxmlformats-officedocument.presentationml.presentation',
-      ],
-      maxSize: 50 * 1024 * 1024, // 50MB
-      cacheControl: 'private, max-age=86400',
-    },
-
-    // Архивы
-    archive: {
-      bucket: R2BucketType.DOCUMENTS,
-      allowedMimeTypes: [
-        'application/zip',
-        'application/x-rar-compressed',
-        'application/x-7z-compressed',
-      ],
-      maxSize: 100 * 1024 * 1024, // 100MB
-      cacheControl: 'private, max-age=86400',
-    },
-  };
-
-  constructor(private readonly r2Client: R2ClientService) {}
+  constructor(
+    private readonly r2Client: R2ClientService,
+    private readonly configService: R2ConfigService,
+    private readonly validationService: R2FileValidationService,
+  ) {}
 
   /**
-   * Валидация файла перед загрузкой
-   */
-  validateFile(
-    buffer: Buffer,
-    fileName: string,
-    fileType: string,
-    mimeType?: string,
-  ): UploadValidationResult {
-    const config = this.fileTypeConfigs[fileType];
-
-    if (!config) {
-      return {
-        isValid: false,
-        error: `Неподдерживаемый тип файла: ${fileType}`,
-      };
-    }
-
-    // Проверка размера
-    if (buffer.length > config.maxSize) {
-      return {
-        isValid: false,
-        error: `Файл слишком большой. Максимальный размер: ${config.maxSize / 1024 / 1024}MB`,
-      };
-    }
-
-    // Определение MIME типа
-    const detectedMimeType = mimeType || mimeTypes.lookup(fileName) || 'application/octet-stream';
-
-    // Проверка MIME типа
-    if (!config.allowedMimeTypes.includes(detectedMimeType)) {
-      return {
-        isValid: false,
-        error: `Неподдерживаемый MIME тип: ${detectedMimeType}. Разрешены: ${config.allowedMimeTypes.join(', ')}`,
-      };
-    }
-
-    return {
-      isValid: true,
-      suggestedBucket: config.bucket,
-    };
-  }
-
-  /**
-   * Загрузка файла
+   * Загружает файл в R2 хранилище
    */
   async uploadFile(
     buffer: Buffer,
@@ -228,133 +61,155 @@ export class R2StorageService {
     fileType: string,
     options?: Partial<R2UploadOptions>,
   ): Promise<R2UploadResult> {
-    const validation = this.validateFile(buffer, fileName, fileType, options?.contentType);
-
-    if (!validation.isValid) {
-      throw new BadRequestException(validation.error);
-    }
-
-    const config = this.fileTypeConfigs[fileType];
-    const bucket = this.r2Client.getBucketName(validation.suggestedBucket || 'documents');
-
-    // Генерация уникального ключа
-    const timestamp = Date.now();
-    const randomSuffix = Math.random().toString(36).substring(2);
-    const key = options?.key || `${fileType}/${timestamp}_${randomSuffix}_${fileName}`;
-
-    const uploadOptions: R2UploadOptions = {
-      bucket,
-      key,
-      contentType: options?.contentType || mimeTypes.lookup(fileName) || 'application/octet-stream',
-      cacheControl: config.cacheControl,
-      metadata: {
-        originalName: fileName,
-        fileType,
-        uploadedAt: new Date().toISOString(),
-        ...options?.metadata,
-      },
-      ...options,
-    };
-
     try {
-      const command = new PutObjectCommand({
-        Bucket: uploadOptions.bucket,
-        Key: uploadOptions.key,
-        Body: buffer,
-        ContentType: uploadOptions.contentType,
-        CacheControl: uploadOptions.cacheControl,
-        Metadata: uploadOptions.metadata,
-        ACL: uploadOptions.acl || 'public-read',
-      });
+      // Валидация файла
+      const validation = await this.validationService.validateFile(buffer, fileName, { fileType });
 
-      const result = await this.r2Client.getClient().send(command);
+      if (!validation.isValid) {
+        throw new R2ValidationError(`File validation failed: ${validation.errors.join(', ')}`, {
+          fileName,
+          fileType,
+          errors: validation.errors,
+        });
+      }
+
+      // Получение конфигурации типа файла
+      const config = this.configService.getFileTypeConfig(fileType);
+      if (!config) {
+        throw new R2ValidationError(`Unsupported file type: ${fileType}`, { fileType });
+      }
+
+      // Подготовка параметров загрузки
+      const uploadOptions = this.prepareUploadOptions(buffer, fileName, fileType, config, options);
+
+      // Выполнение загрузки
+      const result = await this.executeUpload(buffer, uploadOptions);
 
       this.logger.log(
         `File uploaded successfully: ${uploadOptions.key} to bucket ${uploadOptions.bucket}`,
+        { fileType, size: buffer.length, bucket: uploadOptions.bucket },
       );
 
-      return {
-        url: this.r2Client.getPublicUrl(uploadOptions.bucket, uploadOptions.key),
-        key: uploadOptions.key,
-        bucket: uploadOptions.bucket,
-        size: buffer.length,
-        etag: result.ETag?.replace(/"/g, '') || '',
-        lastModified: new Date(),
-      };
+      return result;
     } catch (error) {
-      this.logger.error(`Failed to upload file: ${error.message}`, error.stack);
-      throw new Error(`Ошибка загрузки файла: ${error.message}`);
+      if (R2ErrorUtils.isR2Error(error)) {
+        throw error;
+      }
+
+      const r2Error = R2ErrorUtils.fromAwsError(error, { fileName, fileType });
+      this.logger.error(`Upload failed: ${r2Error.message}`, r2Error.toJSON());
+      throw r2Error;
     }
   }
 
   /**
-   * Получение подписанного URL для загрузки
+   * Удаляет файл из R2 хранилища
+   */
+  async deleteFile(options: R2DeleteOptions): Promise<R2DeleteResult> {
+    try {
+      const command = new DeleteObjectCommand({
+        Bucket: options.bucket,
+        Key: options.key,
+        VersionId: options.versionId,
+      });
+
+      const result = await this.r2Client.getClient().send(command);
+
+      this.logger.log(`File deleted successfully: ${options.key} from bucket ${options.bucket}`, {
+        bucket: options.bucket,
+        key: options.key,
+      });
+
+      return {
+        deleted: true,
+        versionId: result.VersionId,
+        deleteMarker: result.DeleteMarker,
+      };
+    } catch (error) {
+      const r2Error = R2ErrorUtils.fromAwsError(error, options);
+      this.logger.error(`Delete failed: ${r2Error.message}`, r2Error.toJSON());
+      throw r2Error;
+    }
+  }
+
+  /**
+   * Получает подписанный URL для загрузки файла
    */
   async getSignedUploadUrl(
     fileName: string,
     fileType: string,
     expiresIn: number = 3600,
   ): Promise<string> {
-    const config = this.fileTypeConfigs[fileType];
-
-    if (!config) {
-      throw new BadRequestException(`Неподдерживаемый тип файла: ${fileType}`);
-    }
-
-    const bucket = this.r2Client.getBucketName(config.bucket);
-    const timestamp = Date.now();
-    const randomSuffix = Math.random().toString(36).substring(2);
-    const key = `${fileType}/${timestamp}_${randomSuffix}_${fileName}`;
-
-    const command = new PutObjectCommand({
-      Bucket: bucket,
-      Key: key,
-      ContentType: mimeTypes.lookup(fileName) || 'application/octet-stream',
-      CacheControl: config.cacheControl,
-      Metadata: {
-        originalName: fileName,
-        fileType,
-        uploadedAt: new Date().toISOString(),
-      },
-    });
-
-    return await getSignedUrl(this.r2Client.getClient(), command, { expiresIn });
-  }
-
-  /**
-   * Получение подписанного URL для скачивания
-   */
-  async getSignedDownloadUrl(options: R2GetUrlOptions): Promise<string> {
-    const command = new GetObjectCommand({
-      Bucket: options.bucket,
-      Key: options.key,
-    });
-
-    return await getSignedUrl(this.r2Client.getClient(), command, {
-      expiresIn: options.expiresIn || 3600,
-    });
-  }
-
-  /**
-   * Удаление файла
-   */
-  async deleteFile(options: R2DeleteOptions): Promise<void> {
     try {
-      const command = new DeleteObjectCommand({
-        Bucket: options.bucket,
-        Key: options.key,
+      const config = this.configService.getFileTypeConfig(fileType);
+      if (!config) {
+        throw new R2ValidationError(`Unsupported file type: ${fileType}`, { fileType });
+      }
+
+      const bucket = this.r2Client.getBucketName(config.bucket);
+      const key = FileUtils.generateFileKey(fileName, fileType);
+
+      const command = new PutObjectCommand({
+        Bucket: bucket,
+        Key: key,
+        ContentType: mimeTypes.lookup(fileName) || 'application/octet-stream',
+        CacheControl: config.cacheControl,
+        Metadata: {
+          originalName: fileName,
+          fileType,
+          uploadedAt: new Date().toISOString(),
+        },
       });
 
-      await this.r2Client.getClient().send(command);
-      this.logger.log(`File deleted successfully: ${options.key} from bucket ${options.bucket}`);
+      const url = await getSignedUrl(this.r2Client.getClient(), command, { expiresIn });
+
+      this.logger.debug(`Signed upload URL generated for ${fileName}`, { fileType, expiresIn });
+
+      return url;
     } catch (error) {
-      this.logger.error(`Failed to delete file: ${error.message}`, error.stack);
-      throw new Error(`Ошибка удаления файла: ${error.message}`);
+      if (R2ErrorUtils.isR2Error(error)) {
+        throw error;
+      }
+
+      const r2Error = R2ErrorUtils.fromAwsError(error, { fileName, fileType });
+      this.logger.error(`Signed URL generation failed: ${r2Error.message}`, r2Error.toJSON());
+      throw r2Error;
     }
   }
 
   /**
-   * Получение метаданных файла
+   * Получает подписанный URL для скачивания файла
+   */
+  async getSignedDownloadUrl(options: R2GetUrlOptions): Promise<string> {
+    try {
+      const command = new GetObjectCommand({
+        Bucket: options.bucket,
+        Key: options.key,
+        VersionId: options.versionId,
+      });
+
+      const url = await getSignedUrl(this.r2Client.getClient(), command, {
+        expiresIn: options.expiresIn || this.configService.getConfiguration().defaultExpiration,
+      });
+
+      this.logger.debug(`Signed download URL generated for ${options.key}`, {
+        bucket: options.bucket,
+        expiresIn: options.expiresIn,
+      });
+
+      return url;
+    } catch (error) {
+      const r2Error = R2ErrorUtils.fromAwsError(error, options);
+      this.logger.error(
+        `Signed download URL generation failed: ${r2Error.message}`,
+        r2Error.toJSON(),
+      );
+      throw r2Error;
+    }
+  }
+
+  /**
+   * Получает метаданные файла
    */
   async getFileMetadata(bucket: string, key: string): Promise<R2MetadataResult> {
     try {
@@ -370,24 +225,36 @@ export class R2StorageService {
         contentLength: result.ContentLength || 0,
         lastModified: result.LastModified || new Date(),
         etag: result.ETag?.replace(/"/g, '') || '',
+        versionId: result.VersionId,
         metadata: result.Metadata || {},
+        cacheControl: result.CacheControl,
+        expires: result.Expires,
+        storageClass: (result.StorageClass as R2StorageClass) || 'STANDARD',
       };
     } catch (error) {
-      this.logger.error(`Failed to get file metadata: ${error.message}`, error.stack);
-      throw new Error(`Ошибка получения метаданных файла: ${error.message}`);
+      const r2Error = R2ErrorUtils.fromAwsError(error, { bucket, key });
+
+      if (r2Error instanceof R2FileNotFoundError) {
+        this.logger.debug(`File not found: ${key} in bucket ${bucket}`);
+      } else {
+        this.logger.error(`Get metadata failed: ${r2Error.message}`, r2Error.toJSON());
+      }
+
+      throw r2Error;
     }
   }
 
   /**
-   * Список файлов в bucket
+   * Получает список файлов в bucket
    */
   async listFiles(options: R2ListOptions): Promise<R2ListResult> {
     try {
       const command = new ListObjectsV2Command({
         Bucket: options.bucket,
         Prefix: options.prefix,
-        MaxKeys: options.maxKeys || 1000,
+        MaxKeys: Math.min(options.maxKeys || 1000, 1000), // Ограничение безопасности
         ContinuationToken: options.continuationToken,
+        Delimiter: options.delimiter,
       });
 
       const result = await this.r2Client.getClient().send(command);
@@ -398,72 +265,164 @@ export class R2StorageService {
           size: obj.Size || 0,
           lastModified: obj.LastModified || new Date(),
           etag: obj.ETag?.replace(/"/g, '') || '',
-          storageClass: obj.StorageClass || 'STANDARD',
+          storageClass: (obj.StorageClass as R2StorageClass) || 'STANDARD',
+          owner: obj.Owner
+            ? {
+                id: obj.Owner.ID || '',
+                displayName: obj.Owner.DisplayName || '',
+              }
+            : undefined,
         })),
         isTruncated: result.IsTruncated || false,
         continuationToken: options.continuationToken,
         nextContinuationToken: result.NextContinuationToken,
+        keyCount: result.KeyCount || 0,
+        maxKeys: result.MaxKeys || 0,
+        prefix: result.Prefix,
+        delimiter: result.Delimiter,
+        commonPrefixes: result.CommonPrefixes?.map(cp => cp.Prefix || '') || [],
       };
     } catch (error) {
-      this.logger.error(`Failed to list files: ${error.message}`, error.stack);
-      throw new Error(`Ошибка получения списка файлов: ${error.message}`);
+      const r2Error = R2ErrorUtils.fromAwsError(error, options);
+      this.logger.error(`List files failed: ${r2Error.message}`, r2Error.toJSON());
+      throw r2Error;
     }
   }
 
   /**
-   * Копирование файла
+   * Копирует файл
    */
-  async copyFile(
-    sourceBucket: string,
-    sourceKey: string,
-    destBucket: string,
-    destKey: string,
-  ): Promise<void> {
+  async copyFile(options: R2CopyOptions): Promise<R2UploadResult> {
     try {
       const command = new CopyObjectCommand({
-        Bucket: destBucket,
-        Key: destKey,
-        CopySource: `${sourceBucket}/${sourceKey}`,
+        Bucket: options.destBucket,
+        Key: options.destKey,
+        CopySource: `${options.sourceBucket}/${options.sourceKey}`,
+        Metadata: options.metadata,
+        MetadataDirective: options.metadata ? 'REPLACE' : 'COPY',
+        CacheControl: options.cacheControl,
       });
 
-      await this.r2Client.getClient().send(command);
-      this.logger.log(`File copied successfully: ${sourceKey} -> ${destKey}`);
+      const result = await this.r2Client.getClient().send(command);
+
+      // Получаем метаданные скопированного файла
+      const metadata = await this.getFileMetadata(options.destBucket, options.destKey);
+
+      this.logger.log(`File copied successfully: ${options.sourceKey} -> ${options.destKey}`, {
+        sourceBucket: options.sourceBucket,
+        destBucket: options.destBucket,
+      });
+
+      return {
+        url: this.r2Client.getPublicUrl(options.destBucket, options.destKey),
+        key: options.destKey,
+        bucket: options.destBucket,
+        size: metadata.contentLength,
+        etag: result.CopyObjectResult?.ETag?.replace(/"/g, '') || '',
+        lastModified: result.CopyObjectResult?.LastModified || new Date(),
+        versionId: result.VersionId,
+      };
     } catch (error) {
-      this.logger.error(`Failed to copy file: ${error.message}`, error.stack);
-      throw new Error(`Ошибка копирования файла: ${error.message}`);
+      const r2Error = R2ErrorUtils.fromAwsError(error, options);
+      this.logger.error(`Copy file failed: ${r2Error.message}`, r2Error.toJSON());
+      throw r2Error;
     }
   }
 
   /**
-   * Проверка существования файла
+   * Проверяет существование файла
    */
   async fileExists(bucket: string, key: string): Promise<boolean> {
     try {
       await this.getFileMetadata(bucket, key);
       return true;
     } catch (error) {
-      return false;
+      if (error instanceof R2FileNotFoundError) {
+        return false;
+      }
+      throw error;
     }
   }
 
   /**
-   * Получение публичного URL файла
+   * Получает публичный URL файла
    */
   getPublicUrl(bucket: string, key: string): string {
     return this.r2Client.getPublicUrl(bucket, key);
   }
 
   /**
-   * Получение конфигурации для типа файла
+   * Получает конфигурацию типа файла
    */
-  getFileTypeConfig(fileType: string): FileTypeConfig | undefined {
-    return this.fileTypeConfigs[fileType];
+  getFileTypeConfig(fileType: string): FileTypeConfig | null {
+    return this.configService.getFileTypeConfig(fileType);
   }
 
   /**
-   * Получение всех поддерживаемых типов файлов
+   * Получает все поддерживаемые типы файлов
    */
-  getSupportedFileTypes(): string[] {
-    return Object.keys(this.fileTypeConfigs);
+  getSupportedFileTypes(): readonly string[] {
+    return this.configService.getSupportedFileTypes();
+  }
+
+  /**
+   * Подготавливает параметры для загрузки
+   */
+  private prepareUploadOptions(
+    buffer: Buffer,
+    fileName: string,
+    fileType: string,
+    config: FileTypeConfig,
+    userOptions?: Partial<R2UploadOptions>,
+  ): R2UploadOptions {
+    const bucket = this.r2Client.getBucketName(config.bucket);
+    const key = userOptions?.key || FileUtils.generateFileKey(fileName, fileType);
+    const contentType =
+      userOptions?.contentType || mimeTypes.lookup(fileName) || 'application/octet-stream';
+
+    return {
+      bucket,
+      key,
+      contentType,
+      cacheControl: config.cacheControl,
+      metadata: {
+        originalName: fileName,
+        fileType,
+        uploadedAt: new Date().toISOString(),
+        ...userOptions?.metadata,
+      },
+      acl: userOptions?.acl || 'public-read',
+      storageClass: userOptions?.storageClass || 'STANDARD',
+      expires: userOptions?.expires,
+    };
+  }
+
+  /**
+   * Выполняет загрузку файла
+   */
+  private async executeUpload(buffer: Buffer, options: R2UploadOptions): Promise<R2UploadResult> {
+    const command = new PutObjectCommand({
+      Bucket: options.bucket,
+      Key: options.key,
+      Body: buffer,
+      ContentType: options.contentType,
+      CacheControl: options.cacheControl,
+      Metadata: options.metadata as Record<string, string>,
+      ACL: options.acl,
+      StorageClass: options.storageClass,
+      Expires: options.expires,
+    });
+
+    const result = await this.r2Client.getClient().send(command);
+
+    return {
+      url: this.r2Client.getPublicUrl(options.bucket, options.key),
+      key: options.key,
+      bucket: options.bucket,
+      size: buffer.length,
+      etag: result.ETag?.replace(/"/g, '') || '',
+      lastModified: new Date(),
+      versionId: result.VersionId,
+    };
   }
 }

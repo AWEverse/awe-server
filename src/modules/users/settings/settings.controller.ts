@@ -19,7 +19,7 @@ import { GetUser } from '../../common/decorators/get-user.decorator';
 @ApiTags('Settings')
 @Controller('settings')
 @UseGuards(JwtAuthGuard)
-@ApiBearerAuth()
+@ApiBearerAuth('JWT-auth')
 export class SettingsController {
   constructor(private readonly settingsService: SettingsService) {}
 

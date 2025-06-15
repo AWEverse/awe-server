@@ -4,7 +4,7 @@ import {
   BadRequestException,
   ConflictException,
 } from '@nestjs/common';
-import { PrismaService } from '../../../libs/supabase/db/prisma.service';
+import { PrismaService } from '../../../libs/db/prisma.service';
 import {
   CreateForumCategoryDto,
   UpdateForumCategoryDto,

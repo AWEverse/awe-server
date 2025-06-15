@@ -1,6 +1,6 @@
 import { Controller, Get } from '@nestjs/common';
 import { ApiTags, ApiOperation, ApiResponse } from '@nestjs/swagger';
-import { PrismaService } from '../../../libs/supabase/db/prisma.service';
+import { PrismaService } from '../../../libs/db/prisma.service';
 import { MemoryOptimizationService } from '../services/memory-optimization.service';
 import { OptimizedCacheService } from '../cache/optimized-cache.service';
 

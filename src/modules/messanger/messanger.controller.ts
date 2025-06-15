@@ -28,6 +28,17 @@ import {
   ArchiveMessagesDto,
 } from './dto/chat.dto';
 import { SendStickerDto, SendGifDto, SendCustomEmojiDto } from './dto/realtime.dto';
+import {
+  ChatResponseDto,
+  MessageResponseDto,
+  PaginatedMessagesResponseDto,
+  PaginatedChatsResponseDto,
+  PaginatedParticipantsResponseDto,
+  PermissionsCheckResponseDto,
+  ArchiveResultResponseDto,
+  StickerPackResponseDto,
+  TrendingGifsResponseDto,
+} from './dto/response.dto';
 import { ChatType, MessageType, ChatRole } from './types';
 import {
   ApiTags,
@@ -42,7 +53,7 @@ import { GlobalAuthGuard } from '../common/guards/global-auth.guard';
 import { UserRequest } from '../auth/types';
 
 @UseInterceptors(ResponseInterceptor)
-@ApiBearerAuth()
+@ApiBearerAuth('JWT-auth')
 @ApiTags('Messenger')
 @Controller('messenger')
 export class MessangerController {
@@ -53,33 +64,41 @@ export class MessangerController {
   private getUserIdFromRequest(request?: any): bigint {
     return request?.user?.id ? BigInt(request.user.id) : BigInt(2);
   }
-
   @Post('chats')
   @ApiOperation({
     summary: 'Create a new chat',
-    description: 'Create a new chat with specified type and optional participants',
+    description:
+      'Create a new chat with specified type and optional participants. For GROUP and CHANNEL types, title is required.',
   })
   @ApiResponse({
     status: 201,
     description: 'Chat created successfully',
+    type: ChatResponseDto,
+  })
+  @ApiResponse({
+    status: 400,
+    description: 'Invalid chat data - missing required fields or invalid participants',
     schema: {
       type: 'object',
       properties: {
-        success: { type: 'boolean', example: true },
-        data: {
-          type: 'object',
-          properties: {
-            id: { type: 'string', example: '123' },
-            type: { type: 'string', enum: ['DIRECT', 'GROUP', 'CHANNEL'] },
-            title: { type: 'string', example: 'Team Discussion' },
-            memberCount: { type: 'number', example: 5 },
-          },
-        },
+        success: { type: 'boolean', example: false },
+        message: { type: 'string', example: 'Title is required for GROUP and CHANNEL chats' },
+        error: { type: 'string', example: 'Bad Request' },
       },
     },
   })
-  @ApiResponse({ status: 400, description: 'Invalid chat data' })
-  @ApiResponse({ status: 403, description: 'Insufficient permissions' })
+  @ApiResponse({
+    status: 403,
+    description: 'Insufficient permissions to create this type of chat',
+    schema: {
+      type: 'object',
+      properties: {
+        success: { type: 'boolean', example: false },
+        message: { type: 'string', example: 'You do not have permission to create channels' },
+        error: { type: 'string', example: 'Forbidden' },
+      },
+    },
+  })
   async createChat(
     @Body(ValidationPipe) createChatDto: CreateChatDto,
     @Request() req: UserRequest,
@@ -108,32 +127,44 @@ export class MessangerController {
   @Get('chats/:chatId')
   @ApiOperation({
     summary: 'Get chat information',
-    description: 'Retrieve detailed information about a specific chat',
+    description:
+      'Retrieve detailed information about a specific chat including member count, creation date, and basic settings',
   })
-  @ApiParam({ name: 'chatId', description: 'Chat ID', type: 'number' })
+  @ApiParam({
+    name: 'chatId',
+    description: 'Unique identifier of the chat',
+    type: 'string',
+    example: '12345678901234567890',
+  })
   @ApiResponse({
     status: 200,
     description: 'Chat information retrieved successfully',
+    type: ChatResponseDto,
+  })
+  @ApiResponse({
+    status: 404,
+    description: 'Chat not found',
     schema: {
       type: 'object',
       properties: {
-        success: { type: 'boolean', example: true },
-        data: {
-          type: 'object',
-          properties: {
-            id: { type: 'string' },
-            type: { type: 'string', enum: ['DIRECT', 'GROUP', 'CHANNEL'] },
-            title: { type: 'string' },
-            description: { type: 'string' },
-            memberCount: { type: 'number' },
-            createdAt: { type: 'string', format: 'date-time' },
-          },
-        },
+        success: { type: 'boolean', example: false },
+        message: { type: 'string', example: 'Chat with ID 12345678901234567890 not found' },
+        error: { type: 'string', example: 'Not Found' },
       },
     },
   })
-  @ApiResponse({ status: 404, description: 'Chat not found' })
-  @ApiResponse({ status: 403, description: 'No access to this chat' })
+  @ApiResponse({
+    status: 403,
+    description: 'No access to this chat - user is not a participant or chat is private',
+    schema: {
+      type: 'object',
+      properties: {
+        success: { type: 'boolean', example: false },
+        message: { type: 'string', example: 'You do not have access to this chat' },
+        error: { type: 'string', example: 'Forbidden' },
+      },
+    },
+  })
   async getChatInfo(@Param('chatId', ParseIntPipe) chatId: number, @Request() req: UserRequest) {
     try {
       const userId = this.getUserIdFromRequest(req);
@@ -147,13 +178,45 @@ export class MessangerController {
   }
   @Put('chats/:chatId')
   @ApiOperation({
-    summary: 'Update chat',
-    description: 'Update chat title, description or avatar',
+    summary: 'Update chat settings',
+    description:
+      'Update chat title, description, or avatar. Only chat owners and admins can perform this action.',
   })
-  @ApiParam({ name: 'chatId', description: 'Chat ID', type: 'number' })
-  @ApiResponse({ status: 200, description: 'Chat updated successfully' })
-  @ApiResponse({ status: 403, description: 'No permission to edit this chat' })
-  @ApiResponse({ status: 404, description: 'Chat not found' })
+  @ApiParam({
+    name: 'chatId',
+    description: 'Unique identifier of the chat to update',
+    type: 'string',
+    example: '12345678901234567890',
+  })
+  @ApiResponse({
+    status: 200,
+    description: 'Chat updated successfully',
+    type: ChatResponseDto,
+  })
+  @ApiResponse({
+    status: 403,
+    description: 'No permission to edit this chat - requires owner or admin role',
+    schema: {
+      type: 'object',
+      properties: {
+        success: { type: 'boolean', example: false },
+        message: { type: 'string', example: 'Only chat owners and admins can edit chat settings' },
+        error: { type: 'string', example: 'Forbidden' },
+      },
+    },
+  })
+  @ApiResponse({
+    status: 404,
+    description: 'Chat not found',
+    schema: {
+      type: 'object',
+      properties: {
+        success: { type: 'boolean', example: false },
+        message: { type: 'string', example: 'Chat not found' },
+        error: { type: 'string', example: 'Not Found' },
+      },
+    },
+  })
   async updateChat(
     @Param('chatId', ParseIntPipe) chatId: number,
     @Body(ValidationPipe) updateChatDto: UpdateChatDto,
@@ -430,44 +493,59 @@ export class MessangerController {
   // ===============================================
   // СООБЩЕНИЯ
   // ===============================================
-
   @Post('chats/:chatId/messages')
   @ApiOperation({
-    summary: 'Send message',
-    description: 'Send a new message to the chat',
+    summary: 'Send message to chat',
+    description:
+      'Send a new message to the specified chat. Supports text, images, videos, audio, files, and other message types.',
   })
-  @ApiParam({ name: 'chatId', description: 'Chat ID', type: 'number' })
+  @ApiParam({
+    name: 'chatId',
+    description: 'Unique identifier of the chat to send message to',
+    type: 'string',
+    example: '12345678901234567890',
+  })
   @ApiResponse({
     status: 201,
     description: 'Message sent successfully',
+    type: MessageResponseDto,
+  })
+  @ApiResponse({
+    status: 400,
+    description: 'Invalid message data - empty content or unsupported message type',
     schema: {
       type: 'object',
       properties: {
-        success: { type: 'boolean', example: true },
-        data: {
-          type: 'object',
-          properties: {
-            id: { type: 'string' },
-            chatId: { type: 'string' },
-            senderId: { type: 'string' },
-            content: { type: 'string' },
-            messageType: { type: 'string', enum: ['TEXT', 'IMAGE', 'VIDEO', 'AUDIO', 'FILE'] },
-            createdAt: { type: 'string', format: 'date-time' },
-            sender: {
-              type: 'object',
-              properties: {
-                id: { type: 'string' },
-                username: { type: 'string' },
-                fullName: { type: 'string' },
-              },
-            },
-          },
-        },
+        success: { type: 'boolean', example: false },
+        message: { type: 'string', example: 'Message content cannot be empty' },
+        error: { type: 'string', example: 'Bad Request' },
       },
     },
   })
-  @ApiResponse({ status: 400, description: 'Invalid message data' })
-  @ApiResponse({ status: 403, description: 'No access to this chat' })
+  @ApiResponse({
+    status: 403,
+    description: 'No access to this chat or user is muted',
+    schema: {
+      type: 'object',
+      properties: {
+        success: { type: 'boolean', example: false },
+        message: { type: 'string', example: 'You are muted in this chat until 2024-12-31' },
+        error: { type: 'string', example: 'Forbidden' },
+      },
+    },
+  })
+  @ApiResponse({
+    status: 404,
+    description: 'Chat not found',
+    schema: {
+      type: 'object',
+      properties: {
+        success: { type: 'boolean', example: false },
+        message: { type: 'string', example: 'Chat not found' },
+        error: { type: 'string', example: 'Not Found' },
+      },
+    },
+  })
   async sendMessage(
     @Param('chatId', ParseIntPipe) chatId: number,
     @Body(ValidationPipe) sendMessageDto: SendMessageDto,
@@ -570,7 +648,7 @@ export class MessangerController {
         `Getting messages for chat ${chatId}, user ${userId}, limit: ${normalizedLimit}`,
       );
 
-      return await this.messengerService.getMessages(BigInt(chatId), userId, {
+      return await this.messengerService.getChatMessages(BigInt(chatId), userId, {
         limit: normalizedLimit,
         beforeMessageId: beforeId ? BigInt(beforeId) : undefined,
         afterMessageId: afterId ? BigInt(afterId) : undefined,

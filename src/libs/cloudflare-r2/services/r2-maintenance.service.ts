@@ -1,13 +1,33 @@
+/**
+ * Улучшенный сервис обслуживания R2 хранилища
+ * Рефакторинг: использование новых сервисов, типизация, обработка ошибок
+ */
+
 import { Injectable, Logger } from '@nestjs/common';
 import { Cron } from '@nestjs/schedule';
 import { R2StorageService } from './r2-storage.service';
+import { R2ConfigService } from './r2-config.service';
+import { R2BatchService } from './r2-batch.service';
 import { R2BucketType } from '../types';
+import { R2Error, R2ErrorUtils, R2MaintenanceError } from '../exceptions/r2-errors';
 
 export interface CleanupRule {
-  bucket: R2BucketType;
-  prefix?: string;
-  olderThanDays: number;
-  filePattern?: RegExp;
+  readonly bucket: R2BucketType;
+  readonly prefix?: string;
+  readonly olderThanDays: number;
+  readonly filePattern?: RegExp;
+}
+
+export interface StorageStats {
+  readonly [bucketType: string]: {
+    readonly count: number;
+    readonly totalSize: number;
+  };
+}
+
+export interface FileIntegrityResult {
+  readonly key: string;
+  readonly status: 'ok' | 'corrupted' | 'missing';
 }
 
 @Injectable()
@@ -15,7 +35,7 @@ export class R2MaintenanceService {
   private readonly logger = new Logger(R2MaintenanceService.name);
 
   // Правила очистки для разных типов файлов
-  private readonly cleanupRules: CleanupRule[] = [
+  private readonly cleanupRules: readonly CleanupRule[] = [
     // Временные файлы удаляем через 1 день
     {
       bucket: R2BucketType.DOCUMENTS,
@@ -38,7 +58,11 @@ export class R2MaintenanceService {
     },
   ];
 
-  constructor(private readonly r2Storage: R2StorageService) {}
+  constructor(
+    private readonly r2Storage: R2StorageService,
+    private readonly configService: R2ConfigService,
+    private readonly batchService: R2BatchService,
+  ) {}
 
   /**
    * Автоматическая очистка старых файлов (запускается каждый день в 2:00)
@@ -48,13 +72,25 @@ export class R2MaintenanceService {
     this.logger.log('Starting scheduled cleanup...');
 
     try {
+      let totalCleaned = 0;
+
       for (const rule of this.cleanupRules) {
-        await this.cleanupByRule(rule);
+        const cleaned = await this.cleanupByRule(rule);
+        totalCleaned += cleaned;
       }
 
-      this.logger.log('Scheduled cleanup completed successfully');
+      this.logger.log(
+        `Scheduled cleanup completed successfully. Total files cleaned: ${totalCleaned}`,
+      );
     } catch (error) {
-      this.logger.error(`Scheduled cleanup failed: ${error.message}`, error.stack);
+      if (R2ErrorUtils.isR2Error(error)) {
+        this.logger.error(`Scheduled cleanup failed: ${error.message}`, error.toJSON());
+      } else {
+        const r2Error = new R2MaintenanceError(`Scheduled cleanup failed: ${error.message}`, {
+          error: error.message,
+        });
+        this.logger.error(`Scheduled cleanup failed: ${r2Error.message}`, r2Error.toJSON());
+      }
     }
   }
 
@@ -62,15 +98,15 @@ export class R2MaintenanceService {
    * Очистка по правилу
    */
   async cleanupByRule(rule: CleanupRule): Promise<number> {
-    const bucketName = this.r2Storage['r2Client'].getBucketName(rule.bucket);
-    const cutoffDate = new Date();
-    cutoffDate.setDate(cutoffDate.getDate() - rule.olderThanDays);
-
-    this.logger.log(
-      `Cleaning up files in ${bucketName}/${rule.prefix || ''} older than ${rule.olderThanDays} days`,
-    );
-
     try {
+      const bucketName = this.configService.getBucketName(rule.bucket);
+      const cutoffDate = new Date();
+      cutoffDate.setDate(cutoffDate.getDate() - rule.olderThanDays);
+
+      this.logger.log(
+        `Cleaning up files in ${bucketName}/${rule.prefix || ''} older than ${rule.olderThanDays} days`,
+      );
+
       const listResult = await this.r2Storage.listFiles({
         bucket: bucketName,
         prefix: rule.prefix,
@@ -96,26 +132,24 @@ export class R2MaintenanceService {
         return 0;
       }
 
-      // Удаляем файлы пачками по 100
-      const batchSize = 100;
-      let deletedCount = 0;
+      // Используем batch service для удаления
+      const deleteItems = filesToDelete.map(obj => ({
+        bucket: bucketName,
+        key: obj.key,
+      }));
 
-      for (let i = 0; i < filesToDelete.length; i += batchSize) {
-        const batch = filesToDelete.slice(i, i + batchSize);
-        const deleteItems = batch.map(obj => ({
-          bucket: bucketName,
-          key: obj.key,
-        }));
+      const batchResult = await this.batchService.deleteBatch(deleteItems, {
+        concurrency: 10,
+        retryAttempts: 2,
+        stopOnError: false,
+      });
 
-        const batchResult =
-          (await this.r2Storage['r2BatchService']?.deleteBatch?.(deleteItems)) ||
-          (await this.deleteBatchManual(deleteItems));
+      const deletedCount = batchResult.successCount;
 
-        deletedCount += batchResult.successful.length;
-
-        if (batchResult.failed.length > 0) {
-          this.logger.warn(`Failed to delete ${batchResult.failed.length} files in batch`);
-        }
+      if (batchResult.failureCount > 0) {
+        this.logger.warn(`Failed to delete ${batchResult.failureCount} files in cleanup`, {
+          failures: batchResult.failed,
+        });
       }
 
       this.logger.log(
@@ -123,38 +157,18 @@ export class R2MaintenanceService {
       );
       return deletedCount;
     } catch (error) {
-      this.logger.error(
-        `Cleanup failed for ${bucketName}/${rule.prefix || ''}: ${error.message}`,
-        error.stack,
-      );
-      return 0;
-    }
-  }
-
-  /**
-   * Ручное удаление пачки файлов (если batch service недоступен)
-   */
-  private async deleteBatchManual(
-    items: Array<{ bucket: string; key: string }>,
-  ): Promise<{ successful: string[]; failed: Array<{ key: string; error: string }> }> {
-    const result = {
-      successful: [] as string[],
-      failed: [] as Array<{ key: string; error: string }>,
-    };
-
-    for (const item of items) {
-      try {
-        await this.r2Storage.deleteFile(item);
-        result.successful.push(item.key);
-      } catch (error) {
-        result.failed.push({
-          key: item.key,
-          error: error.message,
-        });
+      if (R2ErrorUtils.isR2Error(error)) {
+        this.logger.error(`Cleanup failed: ${error.message}`, error.toJSON());
+        throw error;
       }
-    }
 
-    return result;
+      const r2Error = new R2MaintenanceError(`Cleanup failed for rule: ${error.message}`, {
+        rule,
+        error: error.message,
+      });
+      this.logger.error(`Cleanup failed: ${r2Error.message}`, r2Error.toJSON());
+      throw r2Error;
+    }
   }
 
   /**
@@ -163,45 +177,72 @@ export class R2MaintenanceService {
   async runManualCleanup(bucketType?: R2BucketType): Promise<number> {
     this.logger.log('Starting manual cleanup...');
 
-    let totalDeleted = 0;
-    const rulesToApply = bucketType
-      ? this.cleanupRules.filter(rule => rule.bucket === bucketType)
-      : this.cleanupRules;
+    try {
+      let totalDeleted = 0;
+      const rulesToApply = bucketType
+        ? this.cleanupRules.filter(rule => rule.bucket === bucketType)
+        : this.cleanupRules;
 
-    for (const rule of rulesToApply) {
-      totalDeleted += await this.cleanupByRule(rule);
+      for (const rule of rulesToApply) {
+        totalDeleted += await this.cleanupByRule(rule);
+      }
+
+      this.logger.log(`Manual cleanup completed. Total files deleted: ${totalDeleted}`);
+      return totalDeleted;
+    } catch (error) {
+      if (R2ErrorUtils.isR2Error(error)) {
+        this.logger.error(`Manual cleanup failed: ${error.message}`, error.toJSON());
+        throw error;
+      }
+
+      const r2Error = new R2MaintenanceError(`Manual cleanup failed: ${error.message}`, {
+        bucketType,
+        error: error.message,
+      });
+      this.logger.error(`Manual cleanup failed: ${r2Error.message}`, r2Error.toJSON());
+      throw r2Error;
     }
-
-    this.logger.log(`Manual cleanup completed: ${totalDeleted} files deleted`);
-    return totalDeleted;
   }
 
   /**
    * Получение статистики использования хранилища
    */
-  async getStorageStats(): Promise<Record<string, { count: number; totalSize: number }>> {
+  async getStorageStats(): Promise<StorageStats> {
     const stats: Record<string, { count: number; totalSize: number }> = {};
 
-    for (const bucketType of Object.values(R2BucketType)) {
-      const bucketName = this.r2Storage['r2Client'].getBucketName(bucketType);
+    try {
+      for (const bucketType of Object.values(R2BucketType)) {
+        try {
+          const bucketName = this.configService.getBucketName(bucketType);
 
-      try {
-        const listResult = await this.r2Storage.listFiles({
-          bucket: bucketName,
-          maxKeys: 10000, // Увеличиваем лимит для более точной статистики
-        });
+          const listResult = await this.r2Storage.listFiles({
+            bucket: bucketName,
+            maxKeys: 10000,
+          });
 
-        stats[bucketType] = {
-          count: listResult.objects.length,
-          totalSize: listResult.objects.reduce((sum, obj) => sum + obj.size, 0),
-        };
-      } catch (error) {
-        this.logger.error(`Failed to get stats for bucket ${bucketName}: ${error.message}`);
-        stats[bucketType] = { count: 0, totalSize: 0 };
+          stats[bucketType] = {
+            count: listResult.objects.length,
+            totalSize: listResult.objects.reduce((sum, obj) => sum + obj.size, 0),
+          };
+        } catch (error) {
+          this.logger.warn(`Failed to get stats for bucket ${bucketType}: ${error.message}`);
+          stats[bucketType] = { count: 0, totalSize: 0 };
+        }
       }
-    }
 
-    return stats;
+      return stats;
+    } catch (error) {
+      if (R2ErrorUtils.isR2Error(error)) {
+        this.logger.error(`Storage stats failed: ${error.message}`, error.toJSON());
+        throw error;
+      }
+
+      const r2Error = new R2MaintenanceError(`Storage stats failed: ${error.message}`, {
+        error: error.message,
+      });
+      this.logger.error(`Storage stats failed: ${r2Error.message}`, r2Error.toJSON());
+      throw r2Error;
+    }
   }
 
   /**
@@ -210,8 +251,8 @@ export class R2MaintenanceService {
   async verifyFileIntegrity(
     bucket: string,
     prefix?: string,
-  ): Promise<Array<{ key: string; status: 'ok' | 'corrupted' | 'missing' }>> {
-    const results: Array<{ key: string; status: 'ok' | 'corrupted' | 'missing' }> = [];
+  ): Promise<readonly FileIntegrityResult[]> {
+    const results: FileIntegrityResult[] = [];
 
     try {
       const listResult = await this.r2Storage.listFiles({
@@ -232,16 +273,40 @@ export class R2MaintenanceService {
             status: isIntact ? 'ok' : 'corrupted',
           });
         } catch (error) {
+          this.logger.debug(`File integrity check failed for ${obj.key}: ${error.message}`);
           results.push({
             key: obj.key,
             status: 'missing',
           });
         }
       }
-    } catch (error) {
-      this.logger.error(`File integrity check failed: ${error.message}`, error.stack);
-    }
 
-    return results;
+      this.logger.log(
+        `File integrity check completed for ${bucket}. ` +
+          `Checked: ${results.length}, OK: ${results.filter(r => r.status === 'ok').length}`,
+      );
+
+      return results;
+    } catch (error) {
+      if (R2ErrorUtils.isR2Error(error)) {
+        this.logger.error(`File integrity check failed: ${error.message}`, error.toJSON());
+        throw error;
+      }
+
+      const r2Error = new R2MaintenanceError(`File integrity check failed: ${error.message}`, {
+        bucket,
+        prefix,
+        error: error.message,
+      });
+      this.logger.error(`File integrity check failed: ${r2Error.message}`, r2Error.toJSON());
+      throw r2Error;
+    }
+  }
+
+  /**
+   * Получение правил очистки
+   */
+  getCleanupRules(): readonly CleanupRule[] {
+    return this.cleanupRules;
   }
 }

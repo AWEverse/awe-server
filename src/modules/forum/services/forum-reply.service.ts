@@ -4,7 +4,7 @@ import {
   ForbiddenException,
   BadRequestException,
 } from '@nestjs/common';
-import { PrismaService } from '../../../libs/supabase/db/prisma.service';
+import { PrismaService } from '../../../libs/db/prisma.service';
 import { CreateForumReplyDto, UpdateForumReplyDto, ForumReplyResponseDto } from '../dto/forum.dto';
 
 @Injectable()

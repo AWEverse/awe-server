@@ -1,4 +1,5 @@
 import { Module } from '@nestjs/common';
+import { AuthModule } from '../auth/auth.module';
 import { ForumController } from './controllers/forum.controller';
 import { ForumCategoryController } from './controllers/forum-category.controller';
 import { ForumSearchController } from './controllers/forum-search.controller';
@@ -10,7 +11,7 @@ import { ForumSearchService } from './services/forum-search.service';
 import { ForumModerationService } from './services/forum-moderation.service';
 
 @Module({
-  imports: [],
+  imports: [AuthModule],
   controllers: [
     ForumController,
     ForumCategoryController,

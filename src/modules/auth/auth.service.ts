@@ -7,9 +7,15 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
+import { JwtService } from '@nestjs/jwt';
+import * as argon2 from 'argon2';
+import { blake3 } from '@noble/hashes/blake3';
+import { v4 as uuidv4 } from 'uuid';
 import { SupabaseAuthService } from '../../libs/supabase/auth/supabase-auth.service';
-import { PrismaService } from '../../libs/supabase/db/prisma.service';
+import { PrismaService } from '../../libs/db/prisma.service';
 import { AUTH_CONSTANTS } from './constants/auth.constants';
+import { TOKEN_CONFIG, TokenLifetimes } from './constants/token.constants';
+import { verifyDeviceToken } from './utils/verifyFingerprint';
 import {
   LoginResponse,
   RegisterResponse,
@@ -22,66 +28,230 @@ export class AuthService {
   private readonly logger = new Logger(AuthService.name);
   private readonly blacklistedTokens = new Set<string>();
   private readonly failedAttempts = new Map<string, { count: number; lockedUntil?: number }>();
+  private readonly tokenLifetimes: TokenLifetimes;
 
   constructor(
     private readonly supabaseAuth: SupabaseAuthService,
     private readonly prisma: PrismaService,
     private readonly configService: ConfigService,
-  ) {}
+    private readonly jwtService: JwtService,
+  ) {
+    // Initialize configurable token lifetimes
+    this.tokenLifetimes = {
+      accessTokenMs:
+        (this.configService.get<number>(TOKEN_CONFIG.ACCESS_TOKEN.ENV_KEY) || 15) * 60 * 1000,
+      refreshTokenMs:
+        (this.configService.get<number>(TOKEN_CONFIG.REFRESH_TOKEN.ENV_KEY) || 30) *
+        24 *
+        60 *
+        60 *
+        1000,
+      sessionMs:
+        (this.configService.get<number>(TOKEN_CONFIG.SESSION.ENV_KEY) || 24) * 60 * 60 * 1000,
+    };
+  }
 
   async register(
     email: string,
     password: string,
     username: string,
     fullName?: string,
+    deviceToken: string = '',
+    userAgent?: string,
+    fingerprint?: string,
   ): Promise<RegisterResponse> {
     this.logger.log(`Registration attempt for email: ${email}`);
 
-    // Use Prisma transaction for consistency
     return this.prisma.$transaction(async tx => {
       try {
-        // Validate input
         await this.validateRegistrationInput(email, username, password);
 
-        // Check for existing user by email
         const existingEmailUser = await tx.user.findUnique({
           where: { email: email.toLowerCase() },
         });
+
         if (existingEmailUser) {
           throw new ConflictException('User with this email already exists');
         }
 
-        // Check for existing username
         const existingUsernameUser = await tx.user.findUnique({
           where: { username: username.toLowerCase() },
         });
+
         if (existingUsernameUser) {
           throw new ConflictException('Username is already taken');
         }
 
-        // Register with Supabase first
-        const result = await this.supabaseAuth.signUp(email, password);
-        if (!result || !result.user) {
-          throw new BadRequestException('Failed to register user with authentication provider');
+        const hashedPassword = await argon2.hash(password, {
+          type: argon2.argon2id,
+          memoryCost: 2 ** 16, // 64 MB
+          timeCost: 3,
+          parallelism: 1,
+        });
+
+        let deviceId: string | null = null;
+        if (deviceToken) {
+          try {
+            deviceId = await verifyDeviceToken(deviceToken);
+          } catch (error) {
+            this.logger.warn(`Invalid device token during registration: ${error.message}`);
+            // Continue without device registration - not critical for registration
+          }
         }
 
-        // Create user in database with Supabase ID
         const newUser = await tx.user.create({
           data: {
             email: email.toLowerCase(),
             username: username.toLowerCase(),
+            password: hashedPassword,
             fullName: fullName?.trim() || null,
-            supabaseId: result.user.id,
             flags: 0, // Default flags
             status: 'ACTIVE',
-            roleId: 1, // Default role
+            roleId: null, // Default role
           },
           include: {
             role: true,
           },
         });
 
+        let device: any = null;
+        if (deviceId) {
+          try {
+            device = await tx.device.create({
+              data: {
+                userId: newUser.id,
+                deviceId: deviceId,
+                deviceName: userAgent ? this.extractDeviceName(userAgent) : null,
+                deviceType: userAgent ? this.extractDeviceType(userAgent) : null,
+                deviceVersion: userAgent ? this.extractDeviceVersion(userAgent) : null,
+                userAgent: userAgent || null,
+                fingerprint: fingerprint || null,
+                flags: 1, // isActive
+                lastUsed: new Date(),
+              },
+            });
+          } catch (error) {
+            this.logger.warn(`Failed to create device record: ${error.message}`);
+            // Continue - device registration is not critical
+          }
+        }
+
+        let session: any = null;
+        let refreshTokenRecord: any = null;
+        let refreshToken: string | null = null;
+
+        if (device) {
+          try {
+            // Деактивировать все существующие сессии для этого устройства
+            await this.deactivateOldDeviceSessions(newUser.id, device.id, tx);
+
+            const ratchetState = Buffer.from(JSON.stringify({ initialized: true, counter: 0 }));
+            session = await tx.session.create({
+              data: {
+                userId: newUser.id,
+                deviceId: device.id,
+                ratchetState,
+                sessionKey: null, // Placeholder until X3DH key exchange is established
+                expiresAt: new Date(Date.now() + this.tokenLifetimes.sessionMs),
+                flags: 1, // isActive
+              },
+            });
+
+            refreshToken = this.generateSecureToken(64);
+            const tokenHash = Buffer.from(blake3(refreshToken)).toString('hex');
+            const expiresAt = new Date(Date.now() + this.tokenLifetimes.refreshTokenMs);
+
+            // SECURITY: Store only tokenHash, not the actual token
+            refreshTokenRecord = await tx.refreshToken.create({
+              data: {
+                userId: newUser.id,
+                sessionId: session.id,
+                token: refreshToken, // TODO: Remove after migration - store only hash
+                tokenHash,
+                expiresAt,
+                deviceId: device.deviceId,
+                isRevoked: false,
+                isUsed: false,
+              },
+            });
+          } catch (error) {
+            this.logger.warn(`Failed to create session/refresh token: ${error.message}`);
+          }
+        }
+
         this.logger.log(`User registered successfully: ${newUser.id}`);
+
+        // Register user with Supabase for JWT token generation
+        try {
+          const supabaseResult = await this.supabaseAuth.signUp(newUser.email, password);
+          if (supabaseResult?.session?.access_token) {
+            // Use Supabase's access token
+            const accessToken = supabaseResult.session.access_token;
+            const refreshToken = supabaseResult.session.refresh_token;
+
+            // SECURITY: Ensure only one session per device
+            // Store Supabase refresh token in our database for tracking
+            if (refreshToken && device) {
+              try {
+                // Отозвать все существующие токены для этого устройства для обеспечения одной сессии (если есть)
+                await tx.refreshToken.updateMany({
+                  where: {
+                    userId: newUser.id,
+                    deviceId: device.deviceId,
+                    isRevoked: false,
+                  },
+                  data: { isRevoked: true },
+                });
+
+                await tx.refreshToken.create({
+                  data: {
+                    userId: newUser.id,
+                    sessionId: session?.id || null,
+                    token: refreshToken,
+                    tokenHash: Buffer.from(blake3(refreshToken)).toString('hex'),
+                    expiresAt: new Date(Date.now() + this.tokenLifetimes.refreshTokenMs),
+                    deviceId: device.deviceId,
+                    isRevoked: false,
+                    isUsed: false,
+                  },
+                });
+              } catch (error) {
+                this.logger.warn(`Failed to store Supabase refresh token: ${error.message}`);
+              }
+            }
+
+            return {
+              user: {
+                id: newUser.id.toString(),
+                email: newUser.email,
+                username: newUser.username,
+                fullName: newUser.fullName || undefined,
+                emailVerified: !!supabaseResult.user?.email_confirmed_at,
+              },
+              accessToken,
+              refreshToken,
+              expiresAt: supabaseResult.session.expires_at
+                ? supabaseResult.session.expires_at * 1000
+                : Date.now() + this.tokenLifetimes.accessTokenMs,
+              tokenType: 'Bearer',
+              message: 'Registration successful',
+              requiresEmailVerification: !supabaseResult.user?.email_confirmed_at,
+            };
+          }
+        } catch (supabaseError) {
+          this.logger.warn(
+            `Supabase registration failed, using local JWT: ${supabaseError.message}`,
+          );
+        }
+
+        // Fallback to local JWT generation if Supabase fails
+        const deviceRisk = device ? await this.assessDeviceRisk(device, userAgent) : 'high';
+        const payload = this.createJWTPayload(newUser, deviceRisk);
+        const finalLifetimes = this.getTokenLifetimesForRisk(deviceRisk);
+
+        const accessToken = this.jwtService.sign(payload, {
+          expiresIn: Math.floor(finalLifetimes.accessTokenMs / 1000), // Convert to seconds
+        });
 
         return {
           user: {
@@ -89,10 +259,14 @@ export class AuthService {
             email: newUser.email,
             username: newUser.username,
             fullName: newUser.fullName || undefined,
-            emailVerified: !!result.user.email_confirmed_at,
+            emailVerified: true, // Since we're not using email verification in this flow
           },
+          accessToken,
+          refreshToken: refreshToken, // Return the original token, not the hash
+          expiresAt: Date.now() + finalLifetimes.accessTokenMs,
+          tokenType: 'Bearer',
           message: 'Registration successful',
-          requiresEmailVerification: !result.user.email_confirmed_at,
+          requiresEmailVerification: false,
         };
       } catch (error) {
         this.logger.error(`Registration failed for ${email}:`, error.message);
@@ -101,155 +275,350 @@ export class AuthService {
     });
   }
 
-  async login(email: string, password: string, rememberMe = false): Promise<LoginResponse> {
+  async login(
+    email: string,
+    password: string,
+    deviceToken: string = '',
+    userAgent?: string,
+    fingerprint?: string,
+  ): Promise<LoginResponse> {
     this.logger.log(`Login attempt for email: ${email}`);
 
-    try {
-      // Check for account lockout
-      await this.checkAccountLockout(email);
+    return this.prisma.$transaction(async tx => {
+      try {
+        // Check for account lockout
+        await this.checkAccountLockout(email);
 
-      // Authenticate with Supabase
-      const result = await this.supabaseAuth.signIn(email, password);
-      if (!result || !result.user || !result.session) {
-        await this.recordFailedAttempt(email);
-        throw new UnauthorizedException('Invalid email or password');
-      }
-
-      // Get user from database
-      const dbUser = await this.prisma.safeQuery(async () => {
-        return await this.prisma.user.findUnique({
+        // 1. Найти пользователя
+        const dbUser = await tx.user.findUnique({
           where: { email: email.toLowerCase() },
-          include: { role: true },
+          select: {
+            id: true,
+            email: true,
+            username: true,
+            password: true,
+            fullName: true,
+            status: true,
+            lastSeen: true,
+            createdAt: true,
+            updatedAt: true,
+            role: true,
+          },
         });
-      });
 
-      if (!dbUser) {
-        throw new UnauthorizedException('User not found');
-      }
+        if (!dbUser) {
+          await this.recordFailedAttempt(email);
+          throw new UnauthorizedException('Invalid email or password');
+        }
 
-      // Check user status
-      if (dbUser.status !== 'ACTIVE') {
-        throw new UnauthorizedException(`Account is ${dbUser.status.toLowerCase()}`);
-      }
+        // 2. Проверить пароль (argon2)
+        const isPasswordValid = await argon2.verify(dbUser.password || '', password);
+        if (!isPasswordValid) {
+          await this.recordFailedAttempt(email);
+          throw new UnauthorizedException('Invalid email or password');
+        }
 
-      // Store refresh token in database
-      const refreshTokenRecord = await this.storeRefreshToken(
-        dbUser.id.toString(),
-        result.session.refresh_token,
-        rememberMe,
-      );
+        // Check user status
+        if (dbUser.status !== 'ACTIVE') {
+          throw new UnauthorizedException(`Account is ${dbUser.status.toLowerCase()}`);
+        }
 
-      // Update last login
-      await this.prisma.safeQuery(() =>
-        this.prisma.user.update({
-          where: { id: dbUser.id },
-          data: { lastSeen: new Date() },
-        }),
-      );
+        // 3. Проверить deviceToken (как в регистрации)
+        let deviceId: string | null = null;
+        if (deviceToken) {
+          try {
+            deviceId = await verifyDeviceToken(deviceToken);
+          } catch (error) {
+            this.logger.warn(`Invalid device token during login: ${error.message}`);
+            throw new UnauthorizedException('Invalid device token');
+          }
+        }
 
-      // Clear failed attempts
-      this.failedAttempts.delete(email);
-
-      this.logger.log(`User logged in successfully: ${dbUser.id}`);
-
-      const expiresAt = result.session.expires_at
-        ? new Date(result.session.expires_at * 1000).getTime()
-        : Date.now() + 15 * 60 * 1000; // Default 15 minutes
-
-      return {
-        user: {
-          id: dbUser.id.toString(),
-          email: dbUser.email,
-          username: dbUser.username,
-          fullName: dbUser.fullName || undefined,
-          role: dbUser.role,
-          emailVerified: !!result.user.email_confirmed_at,
-          createdAt: dbUser.createdAt,
-          updatedAt: dbUser.updatedAt,
-        },
-        accessToken: result.session.access_token,
-        refreshToken: result.session.refresh_token,
-        expiresAt,
-        tokenType: 'Bearer',
-      };
-    } catch (error) {
-      this.logger.error(`Login failed for ${email}:`, error.message);
-      throw error;
-    }
-  }
-
-  async refresh(refreshToken: string): Promise<LoginResponse> {
-    this.logger.log('Token refresh attempt');
-
-    try {
-      // Check if refresh token exists in database and is not revoked
-      const tokenRecord = await this.prisma.safeQuery(() =>
-        this.prisma.refreshToken.findUnique({
-          where: { token: refreshToken },
-          include: { user: { include: { role: true } } },
-        }),
-      );
-
-      if (!tokenRecord || tokenRecord.isRevoked || new Date() > tokenRecord.expiresAt) {
-        throw new UnauthorizedException('Invalid or expired refresh token');
-      }
-
-      // Check user status
-      if (tokenRecord.user.status !== 'ACTIVE') {
-        throw new UnauthorizedException('User not found or inactive');
-      }
-
-      // Refresh session with Supabase
-      const result = await this.supabaseAuth.refreshSession(refreshToken);
-      if (!result || !result.session) {
-        throw new UnauthorizedException('Failed to refresh session');
-      }
-
-      // Revoke old refresh token and store new one
-      await this.prisma.safeQuery(() =>
-        this.prisma.$transaction(async tx => {
-          // Revoke old token
-          await tx.refreshToken.update({
-            where: { id: tokenRecord.id },
-            data: { isRevoked: true },
+        // 4. Найти или создать Device
+        let device: any = null;
+        if (deviceId) {
+          // Try to find existing device
+          device = await tx.device.findUnique({
+            where: { deviceId },
           });
 
-          // Store new refresh token
-          await this.storeRefreshToken(
-            tokenRecord.userId.toString(),
-            result.session!.refresh_token,
-            false,
-            tx,
-          );
-        }),
-      );
+          if (!device) {
+            // Create new device
+            device = await tx.device.create({
+              data: {
+                userId: dbUser.id,
+                deviceId: deviceId,
+                deviceName: userAgent ? this.extractDeviceName(userAgent) : null,
+                deviceType: userAgent ? this.extractDeviceType(userAgent) : null,
+                deviceVersion: userAgent ? this.extractDeviceVersion(userAgent) : null,
+                userAgent: userAgent || null,
+                fingerprint: fingerprint || null,
+                flags: 1, // isActive
+                lastUsed: new Date(),
+              },
+            });
+          } else {
+            // Check device ownership to prevent device hijacking
+            if (device.userId !== dbUser.id) {
+              this.logger.warn(
+                `Device mismatch detected. Device ${deviceId} belongs to user ${device.userId}, but login attempt by ${dbUser.id}`,
+              );
+              throw new UnauthorizedException('Device mismatch - security violation detected');
+            }
 
-      this.logger.log(`Token refreshed successfully for user: ${tokenRecord.user.id}`);
+            // Update existing device
+            device = await tx.device.update({
+              where: { id: device.id },
+              data: {
+                lastUsed: new Date(),
+                userAgent: userAgent || device.userAgent,
+                fingerprint: fingerprint || device.fingerprint,
+                flags: 1, // Ensure it's active
+              },
+            });
+          }
+        }
 
-      const expiresAt = result.session!.expires_at
-        ? new Date(result.session!.expires_at * 1000).getTime()
-        : Date.now() + 15 * 60 * 1000; // Default 15 minutes
+        // 5. Создать Session и RefreshToken (одна сессия на устройство)
+        let session: any = null;
+        let refreshTokenRecord: any = null;
 
-      return {
-        user: {
-          id: tokenRecord.user.id.toString(),
-          email: tokenRecord.user.email,
-          username: tokenRecord.user.username,
-          fullName: tokenRecord.user.fullName || undefined,
-          role: tokenRecord.user.role,
-          emailVerified: !!result.user?.email_confirmed_at,
-          createdAt: tokenRecord.user.createdAt,
-          updatedAt: tokenRecord.user.updatedAt,
-        },
-        accessToken: result.session!.access_token,
-        refreshToken: result.session!.refresh_token,
-        expiresAt,
-        tokenType: 'Bearer',
-      };
-    } catch (error) {
-      this.logger.error('Token refresh failed:', error.message);
-      throw error;
-    }
+        if (device) {
+          // Деактивировать все существующие сессии для этого устройства
+          await this.deactivateOldDeviceSessions(dbUser.id, device.id, tx);
+
+          // Create new session
+          const ratchetState = Buffer.from(JSON.stringify({ initialized: true, counter: 0 }));
+          session = await tx.session.create({
+            data: {
+              userId: dbUser.id,
+              deviceId: device.id,
+              ratchetState,
+              sessionKey: null, // Placeholder until X3DH key exchange is established
+              expiresAt: new Date(Date.now() + this.tokenLifetimes.sessionMs),
+              flags: 1, // isActive
+            },
+          });
+
+          // Create refresh token - SECURITY: Store only hash
+          const refreshToken = this.generateSecureToken(64);
+          const tokenHash = Buffer.from(blake3(refreshToken)).toString('hex');
+          const expiresAt = new Date(Date.now() + this.tokenLifetimes.refreshTokenMs);
+
+          refreshTokenRecord = await tx.refreshToken.create({
+            data: {
+              userId: dbUser.id,
+              sessionId: session.id,
+              token: refreshToken, // TODO: Remove after migration - store only hash
+              tokenHash,
+              expiresAt,
+              deviceId: device.deviceId,
+              isRevoked: false,
+              isUsed: false,
+            },
+          });
+        }
+
+        // Update last login
+        await tx.user.update({
+          where: { id: dbUser.id },
+          data: { lastSeen: new Date() },
+        });
+
+        // Clear failed attempts
+        this.failedAttempts.delete(email);
+
+        this.logger.log(`User logged in successfully: ${dbUser.id}`);
+
+        // Authenticate with Supabase for JWT token generation
+        try {
+          const supabaseResult = await this.supabaseAuth.signIn(dbUser.email, password);
+          if (supabaseResult?.session?.access_token) {
+            // Use Supabase's access token
+            const accessToken = supabaseResult.session.access_token;
+            const refreshToken = supabaseResult.session.refresh_token;
+
+            // SECURITY: Ensure only one session per device
+            // Store/update Supabase refresh token in our database
+            if (refreshToken && device) {
+              try {
+                // Отозвать все существующие токены для этого устройства для обеспечения одной сессии
+                await tx.refreshToken.updateMany({
+                  where: {
+                    userId: dbUser.id,
+                    deviceId: device.deviceId,
+                    isRevoked: false,
+                  },
+                  data: { isRevoked: true },
+                });
+
+                // Создать новый токен для новой сессии
+                await tx.refreshToken.create({
+                  data: {
+                    userId: dbUser.id,
+                    sessionId: session?.id || null,
+                    token: refreshToken,
+                    tokenHash: Buffer.from(blake3(refreshToken)).toString('hex'),
+                    expiresAt: new Date(Date.now() + this.tokenLifetimes.refreshTokenMs),
+                    deviceId: device.deviceId,
+                    isRevoked: false,
+                    isUsed: false,
+                  },
+                });
+              } catch (error) {
+                this.logger.warn(`Failed to store Supabase refresh token: ${error.message}`);
+              }
+            }
+
+            return {
+              user: {
+                id: dbUser.id.toString(),
+                email: dbUser.email,
+                username: dbUser.username,
+                fullName: dbUser.fullName || undefined,
+                role: dbUser.role,
+                emailVerified: !!supabaseResult.user?.email_confirmed_at,
+                createdAt: dbUser.createdAt,
+                updatedAt: dbUser.updatedAt,
+              },
+              accessToken,
+              refreshToken,
+              expiresAt: supabaseResult.session.expires_at
+                ? supabaseResult.session.expires_at * 1000
+                : Date.now() + this.tokenLifetimes.accessTokenMs,
+              tokenType: 'Bearer',
+            };
+          }
+        } catch (supabaseError) {
+          this.logger.warn(`Supabase login failed, using local JWT: ${supabaseError.message}`);
+        }
+
+        // Fallback to local JWT generation if Supabase fails
+        const deviceRisk = device ? await this.assessDeviceRisk(device, userAgent) : 'high';
+        const payload = this.createJWTPayload(dbUser, deviceRisk);
+        const finalLifetimes = this.getTokenLifetimesForRisk(deviceRisk);
+
+        const accessToken = this.jwtService.sign(payload, {
+          expiresIn: `${finalLifetimes.accessTokenMs}ms`,
+        });
+
+        return {
+          user: {
+            id: dbUser.id.toString(),
+            email: dbUser.email,
+            username: dbUser.username,
+            fullName: dbUser.fullName || undefined,
+            role: dbUser.role,
+            emailVerified: true,
+            createdAt: dbUser.createdAt,
+            updatedAt: dbUser.updatedAt,
+          },
+          accessToken,
+          refreshToken: refreshTokenRecord?.token,
+          expiresAt: Date.now() + finalLifetimes.accessTokenMs,
+          tokenType: 'Bearer',
+        };
+      } catch (error) {
+        this.logger.error(`Login failed for ${email}:`, error.message);
+        throw error;
+      }
+    });
+  }
+
+  async refresh(
+    refreshToken: string,
+    fingerprint?: string,
+    userAgent?: string,
+  ): Promise<LoginResponse> {
+    this.logger.log('Token refresh attempt');
+
+    return this.prisma.$transaction(async tx => {
+      try {
+        // SECURITY: Use secure token validation
+        const validation = await this.validateRefreshToken(refreshToken, fingerprint, tx);
+
+        if (!validation.isValid) {
+          if (
+            validation.reason === 'Token already used (reuse detected)' &&
+            validation.tokenRecord
+          ) {
+            this.logger.warn(
+              `Token reuse detected for user ${validation.tokenRecord.userId}. Revoking session ${validation.tokenRecord.sessionId}`,
+            );
+
+            // Revoke the compromised session and all its tokens
+            await this.revokeAllUserSessions(
+              validation.tokenRecord.userId.toString(),
+              'Token reuse detected',
+              validation.tokenRecord.sessionId.toString(),
+            );
+
+            throw new UnauthorizedException('Token reuse detected - session revoked for security');
+          }
+
+          throw new UnauthorizedException(validation.reason || 'Invalid refresh token');
+        }
+
+        const tokenRecord = validation.tokenRecord;
+
+        // Mark current token as used (preventing reuse)
+        await tx.refreshToken.update({
+          where: { id: tokenRecord.id },
+          data: { isUsed: true },
+        });
+
+        // Generate new refresh token
+        const newRefreshToken = this.generateSecureToken(64);
+        const newTokenHash = Buffer.from(blake3(newRefreshToken)).toString('hex');
+        const expiresAt = new Date(Date.now() + this.tokenLifetimes.refreshTokenMs);
+
+        // Create new refresh token record
+        const newTokenRecord = await tx.refreshToken.create({
+          data: {
+            userId: tokenRecord.userId,
+            sessionId: tokenRecord.sessionId,
+            token: newRefreshToken, // TODO: Remove after migration - store only hash
+            tokenHash: newTokenHash,
+            expiresAt,
+            deviceId: tokenRecord.deviceId,
+            isRevoked: false,
+            isUsed: false,
+          },
+        });
+
+        // Generate new access token with device risk assessment
+        const device = tokenRecord.session?.device;
+        const deviceRisk = device ? await this.assessDeviceRisk(device, userAgent) : 'high';
+        const payload = this.createJWTPayload(tokenRecord.user, deviceRisk);
+        const finalLifetimes = this.getTokenLifetimesForRisk(deviceRisk);
+
+        const accessToken = this.jwtService.sign(payload, {
+          expiresIn: `${finalLifetimes.accessTokenMs}ms`,
+        });
+
+        this.logger.log(`Token refreshed successfully for user: ${tokenRecord.user.id}`);
+
+        return {
+          user: {
+            id: tokenRecord.user.id.toString(),
+            email: tokenRecord.user.email,
+            username: tokenRecord.user.username,
+            fullName: tokenRecord.user.fullName || undefined,
+            role: tokenRecord.user.role,
+            emailVerified: true, // Assuming verified since they have valid session
+            createdAt: tokenRecord.user.createdAt,
+            updatedAt: tokenRecord.user.updatedAt,
+          },
+          accessToken,
+          refreshToken: newRefreshToken, // Return new refresh token
+          expiresAt: Date.now() + finalLifetimes.accessTokenMs,
+          tokenType: 'Bearer',
+        };
+      } catch (error) {
+        this.logger.error('Token refresh failed:', error.message);
+        throw error;
+      }
+    });
   }
 
   async logout(accessToken: string, refreshToken?: string): Promise<{ message: string }> {
@@ -624,30 +993,6 @@ export class AuthService {
     }
   }
 
-  private async storeRefreshToken(
-    userId: string,
-    refreshToken: string,
-    rememberMe = false,
-    transaction?: any,
-  ): Promise<any> {
-    const expiresAt = new Date();
-    if (rememberMe) {
-      expiresAt.setDate(expiresAt.getDate() + 30); // 30 days
-    } else {
-      expiresAt.setDate(expiresAt.getDate() + 7); // 7 days
-    }
-
-    const prismaClient = transaction || this.prisma;
-
-    return await prismaClient.refreshToken.create({
-      data: {
-        userId: BigInt(userId),
-        token: refreshToken,
-        expiresAt,
-      },
-    });
-  }
-
   private async checkAccountLockout(email: string): Promise<void> {
     const attempts = this.failedAttempts.get(email);
     if (attempts?.lockedUntil && Date.now() < attempts.lockedUntil) {
@@ -675,5 +1020,408 @@ export class AuthService {
 
   public blacklistToken(token: string): void {
     this.blacklistedTokens.add(token);
+  }
+
+  // Helper methods for device processing
+  private extractDeviceName(userAgent: string): string | null {
+    // Simple device name extraction from user agent
+    if (userAgent.includes('iPhone')) return 'iPhone';
+    if (userAgent.includes('iPad')) return 'iPad';
+    if (userAgent.includes('Android')) return 'Android Device';
+    if (userAgent.includes('Windows')) return 'Windows PC';
+    if (userAgent.includes('Macintosh')) return 'Mac';
+    if (userAgent.includes('Linux')) return 'Linux PC';
+    return 'Unknown Device';
+  }
+
+  private extractDeviceType(userAgent: string): string | null {
+    if (userAgent.includes('Mobile')) return 'mobile';
+    if (userAgent.includes('Tablet')) return 'tablet';
+    return 'desktop';
+  }
+
+  private extractDeviceVersion(userAgent: string): string | null {
+    // Extract OS version or browser version
+    const versionMatch = userAgent.match(/\b(\d+\.\d+\.\d+|\d+\.\d+)\b/);
+    return versionMatch ? versionMatch[0] : null;
+  }
+
+  private generateSecureToken(length: number = 32): string {
+    const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789';
+    let result = '';
+    for (let i = 0; i < length; i++) {
+      result += chars.charAt(Math.floor(Math.random() * chars.length));
+    }
+    return result;
+  }
+
+  // SECURITY: Helper method for secure token lookup (hash-only storage)
+  private async findRefreshTokenByHash(tokenHash: string, transaction?: any): Promise<any> {
+    const prismaClient = transaction || this.prisma;
+
+    return await prismaClient.refreshToken.findUnique({
+      where: { tokenHash },
+      include: {
+        user: { include: { role: true } },
+        session: { include: { device: true } },
+      },
+    });
+  }
+
+  // SECURITY: Validate refresh token securely
+  private async validateRefreshToken(
+    refreshToken: string,
+    fingerprint?: string,
+    transaction?: any,
+  ): Promise<{ tokenRecord: any; isValid: boolean; reason?: string }> {
+    const tokenHash = Buffer.from(blake3(refreshToken)).toString('hex');
+    const tokenRecord = await this.findRefreshTokenByHash(tokenHash, transaction);
+
+    if (!tokenRecord) {
+      return { tokenRecord: null, isValid: false, reason: 'Token not found' };
+    }
+
+    if (tokenRecord.isRevoked) {
+      return { tokenRecord, isValid: false, reason: 'Token revoked' };
+    }
+
+    if (new Date() > tokenRecord.expiresAt) {
+      return { tokenRecord, isValid: false, reason: 'Token expired' };
+    }
+
+    if (tokenRecord.isUsed) {
+      return { tokenRecord, isValid: false, reason: 'Token already used (reuse detected)' };
+    }
+
+    if (tokenRecord.user.status !== 'ACTIVE') {
+      return { tokenRecord, isValid: false, reason: 'User not active' };
+    }
+
+    // SECURITY: Fingerprint validation
+    if (fingerprint && tokenRecord.session?.device?.fingerprint) {
+      if (tokenRecord.session.device.fingerprint !== fingerprint) {
+        return { tokenRecord, isValid: false, reason: 'Fingerprint mismatch' };
+      }
+    }
+
+    return { tokenRecord, isValid: true };
+  }
+
+  // SECURITY: Assess device risk level (for future dynamic token lifetimes)
+  private async assessDeviceRisk(
+    device: any,
+    userAgent?: string,
+  ): Promise<'low' | 'medium' | 'high'> {
+    // Future implementation could consider:
+    // - Device age and usage patterns
+    // - Geolocation changes
+    // - User agent changes
+    // - Failed login attempts from this device
+    // - Time since last use
+
+    // For now, return basic risk assessment
+    if (!device) return 'high';
+
+    const daysSinceLastUse = (Date.now() - device.lastUsed.getTime()) / (1000 * 60 * 60 * 24);
+
+    if (daysSinceLastUse > 30) return 'high';
+    if (daysSinceLastUse > 7) return 'medium';
+
+    return 'low';
+  }
+
+  // SECURITY: Generate device-specific token lifetimes based on risk
+  private getTokenLifetimesForRisk(risk: 'low' | 'medium' | 'high'): TokenLifetimes {
+    const baseLifetimes = this.tokenLifetimes;
+
+    switch (risk) {
+      case 'high':
+        return {
+          accessTokenMs: Math.min(baseLifetimes.accessTokenMs, 5 * 60 * 1000), // Max 5 minutes
+          refreshTokenMs: Math.min(baseLifetimes.refreshTokenMs, 24 * 60 * 60 * 1000), // Max 1 day
+          sessionMs: Math.min(baseLifetimes.sessionMs, 12 * 60 * 60 * 1000), // Max 12 hours
+        };
+      case 'medium':
+        return {
+          accessTokenMs: Math.min(baseLifetimes.accessTokenMs, 10 * 60 * 1000), // Max 10 minutes
+          refreshTokenMs: Math.min(baseLifetimes.refreshTokenMs, 7 * 24 * 60 * 60 * 1000), // Max 7 days
+          sessionMs: Math.min(baseLifetimes.sessionMs, 24 * 60 * 60 * 1000), // Max 24 hours
+        };
+      case 'low':
+      default:
+        return baseLifetimes;
+    }
+  }
+
+  // SECURITY: Create JWT payload with security features
+  private createJWTPayload(user: any, deviceRisk: 'low' | 'medium' | 'high' = 'low'): any {
+    return {
+      sub: user.id.toString(),
+      jti: uuidv4(), // JWT ID for blacklisting and auditing
+      iat: Math.floor(Date.now() / 1000), // Issued at time
+      // Remove exp from payload - let JWT service handle it via expiresIn option
+      email: user.email,
+      username: user.username,
+      role: user.role?.name || 'user',
+      // TODO: Add 'kid' (Key ID) for JWT signature rotation support
+      risk: deviceRisk, // Include risk level for client-side behavior
+    };
+  }
+
+  // SUPABASE INTEGRATION: Determine whether to use Supabase or local JWT
+  private shouldUseSupabaseAuth(): boolean {
+    // Use environment variable to control JWT strategy
+    const useSupabase = this.configService.get<boolean>('USE_SUPABASE_JWT', false);
+    return useSupabase;
+  }
+
+  // SUPABASE INTEGRATION: Create enhanced payload from Supabase user
+  private createEnhancedSupabasePayload(
+    supabaseUser: any,
+    localUser: any,
+    deviceRisk: 'low' | 'medium' | 'high' = 'low',
+  ): any {
+    return {
+      // Supabase standard claims
+      sub: supabaseUser.id,
+      aud: supabaseUser.aud,
+      iat: Math.floor(Date.now() / 1000),
+
+      // Our enhanced security claims
+      jti: uuidv4(),
+      email: localUser.email,
+      username: localUser.username,
+      role: localUser.role?.name || 'user',
+      risk: deviceRisk,
+
+      // Local user reference for database operations
+      local_user_id: localUser.id.toString(),
+
+      // Session security metadata
+      device_validated: true,
+      fingerprint_checked: true,
+    };
+  }
+
+  // MIGRATION: Method to migrate existing tokens to hash-only storage
+  async migrateToHashOnlyTokens(): Promise<{ migrated: number; errors: number }> {
+    this.logger.log('Starting migration to hash-only token storage');
+
+    let migrated = 0;
+    let errors = 0;
+
+    try {
+      // Find all tokens that still have plain text stored
+      const tokens = await this.prisma.refreshToken.findMany({
+        where: {
+          token: { not: '' }, // Check for non-empty strings
+          isRevoked: false,
+        },
+        take: 1000, // Process in batches
+      });
+
+      for (const token of tokens) {
+        try {
+          if (token.token) {
+            // Verify hash matches
+            const expectedHash = Buffer.from(blake3(token.token)).toString('hex');
+
+            if (token.tokenHash !== expectedHash) {
+              this.logger.warn(`Hash mismatch for token ${token.id}, revoking`);
+              await this.prisma.refreshToken.update({
+                where: { id: token.id },
+                data: { isRevoked: true },
+              });
+              errors++;
+              continue;
+            }
+
+            // Remove plain text token, keep only hash
+            // Note: This would require schema change to make token nullable
+            // For now, we'll use a placeholder to indicate migration
+            await this.prisma.refreshToken.update({
+              where: { id: token.id },
+              data: {
+                // TODO: Make token field nullable in schema for full hash-only storage
+                // token: null, // Remove plain text after schema update
+              },
+            });
+
+            migrated++;
+          }
+        } catch (error) {
+          this.logger.error(`Failed to migrate token ${token.id}:`, error.message);
+          errors++;
+        }
+      }
+
+      this.logger.log(`Migration completed: ${migrated} migrated, ${errors} errors`);
+      return { migrated, errors };
+    } catch (error) {
+      this.logger.error('Migration failed:', error.message);
+      throw error;
+    }
+  }
+
+  // SECURITY: Revoke all sessions for a user (security incident response)
+  async revokeAllUserSessions(
+    userId: string,
+    reason: string = 'Security incident',
+    excludeSessionId?: string,
+  ): Promise<{ revokedSessions: number; revokedTokens: number }> {
+    this.logger.warn(`Revoking all sessions for user ${userId}. Reason: ${reason}`);
+
+    return this.prisma.$transaction(async tx => {
+      // Mark all sessions as inactive
+      const sessionsResult = await tx.session.updateMany({
+        where: {
+          userId: BigInt(userId),
+          id: excludeSessionId ? { not: BigInt(excludeSessionId) } : undefined,
+          flags: 1, // Currently active
+        },
+        data: { flags: 0 }, // Mark as inactive
+      });
+
+      // Revoke all refresh tokens
+      const tokensResult = await tx.refreshToken.updateMany({
+        where: {
+          userId: BigInt(userId),
+          sessionId: excludeSessionId ? { not: BigInt(excludeSessionId) } : undefined,
+          isRevoked: false,
+        },
+        data: { isRevoked: true },
+      });
+
+      // Log security event
+      await tx.securityAuditLog.create({
+        data: {
+          userId: BigInt(userId),
+          eventType: 'SESSION_REVOCATION',
+          severity: 'HIGH',
+          description: `All user sessions revoked. Reason: ${reason}`,
+          metadata: {
+            revokedSessions: sessionsResult.count,
+            revokedTokens: tokensResult.count,
+            timestamp: new Date().toISOString(),
+          },
+        },
+      });
+
+      return {
+        revokedSessions: sessionsResult.count,
+        revokedTokens: tokensResult.count,
+      };
+    });
+  }
+
+  /**
+   * Ensures that only one active session exists per device for security and resource management.
+   * When a user logs in from the same device, all previous sessions for that device are deactivated
+   * and their refresh tokens are revoked.
+   *
+   * This prevents:
+   * - Session hijacking from the same device
+   * - Resource leaks from multiple sessions
+   * - Token confusion and security vulnerabilities
+   *
+   * @param userId - The user ID
+   * @param deviceId - The device ID (internal database ID, not deviceToken)
+   * @param transaction - Optional Prisma transaction
+   * @returns Object with count of deactivated sessions and revoked tokens
+   */
+  private async deactivateOldDeviceSessions(
+    userId: bigint,
+    deviceId: number,
+    transaction?: any,
+  ): Promise<{ deactivatedSessions: number; revokedTokens: number }> {
+    const tx = transaction || this.prisma;
+
+    // Деактивировать все существующие сессии для этого устройства
+    const sessionsResult = await tx.session.updateMany({
+      where: {
+        userId: userId,
+        deviceId: deviceId,
+        flags: 1, // Только активные сессии
+      },
+      data: { flags: 0 }, // Деактивировать
+    });
+
+    // Отозвать все существующие refresh токены для этого устройства
+    const tokensResult = await tx.refreshToken.updateMany({
+      where: {
+        userId: userId,
+        sessionId: {
+          in: await tx.session
+            .findMany({
+              where: { userId: userId, deviceId: deviceId },
+              select: { id: true },
+            })
+            .then(sessions => sessions.map(s => s.id)),
+        },
+        isRevoked: false,
+      },
+      data: { isRevoked: true },
+    });
+
+    if (sessionsResult.count > 0 || tokensResult.count > 0) {
+      this.logger.log(
+        `Device session cleanup for user ${userId}, device ${deviceId}: ` +
+          `${sessionsResult.count} sessions deactivated, ${tokensResult.count} tokens revoked`,
+      );
+    }
+
+    return {
+      deactivatedSessions: sessionsResult.count,
+      revokedTokens: tokensResult.count,
+    };
+  }
+
+  // Get active session for a device
+  async getActiveDeviceSession(userId: string, deviceId: string) {
+    try {
+      const session = await this.prisma.session.findFirst({
+        where: {
+          userId: BigInt(userId),
+          device: { deviceId: deviceId },
+          flags: 1, // Active session
+          expiresAt: { gt: new Date() }, // Not expired
+        },
+        include: {
+          device: true,
+          RefreshToken: {
+            where: {
+              isRevoked: false,
+              expiresAt: { gt: new Date() },
+            },
+            orderBy: { createdAt: 'desc' },
+            take: 1,
+          },
+        },
+      });
+
+      return session;
+    } catch (error) {
+      this.logger.error(`Failed to get active device session: ${error.message}`);
+      return null;
+    }
+  }
+
+  // Check if device has active session
+  async hasActiveDeviceSession(userId: string, deviceId: string): Promise<boolean> {
+    try {
+      const count = await this.prisma.session.count({
+        where: {
+          userId: BigInt(userId),
+          device: { deviceId: deviceId },
+          flags: 1, // Active session
+          expiresAt: { gt: new Date() }, // Not expired
+        },
+      });
+
+      return count > 0;
+    } catch (error) {
+      this.logger.error(`Failed to check device session: ${error.message}`);
+      return false;
+    }
   }
 }

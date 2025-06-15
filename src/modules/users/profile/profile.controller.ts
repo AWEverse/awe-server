@@ -18,7 +18,7 @@ import { GetUser } from '../../common/decorators/get-user.decorator';
 @ApiTags('Profile')
 @Controller('profile')
 @UseGuards(JwtAuthGuard)
-@ApiBearerAuth()
+@ApiBearerAuth('JWT-auth')
 export class ProfileController {
   constructor(private readonly profileService: ProfileService) {}
 

@@ -7,7 +7,6 @@ import { EventEmitterModule } from '@nestjs/event-emitter';
 // Core services
 import { MessangerService } from './messanger.service';
 import { MessangerController } from './messanger.controller';
-import { MessangerRepository } from './messanger.repository';
 
 // Real-time functionality
 import { MessangerGateway } from './realtime/messanger.gateway';
@@ -59,7 +58,6 @@ import { OptimizedDatabasePool } from '../common/database/optimized-pool.service
   providers: [
     // Core services
     MessangerService,
-    MessangerRepository,
 
     // Real-time
     MessangerGateway,
@@ -78,7 +76,6 @@ import { OptimizedDatabasePool } from '../common/database/optimized-pool.service
   ],
   exports: [
     MessangerService,
-    MessangerRepository,
     DatabaseOptimizer,
     MonitoringService,
     MemoryCacheService,

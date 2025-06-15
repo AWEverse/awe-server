@@ -13,6 +13,9 @@ import { ThrottledAuthGuard } from './guards/throttled-auth.guard';
 import { RateLimitGuard } from './guards/rate-limit.guard';
 import { AUTH_CONSTANTS } from './constants/auth.constants';
 import { JwtAuthGuard } from './guards/jwt-auth.guard';
+import { OptionalAuthGuard } from './guards/optional-auth.guard';
+import { ModeratorGuard } from './guards/moderator.guard';
+import { AdminGuard } from './guards/admin.guard';
 
 @Module({
   imports: [
@@ -51,10 +54,13 @@ import { JwtAuthGuard } from './guards/jwt-auth.guard';
     Logger,
     JwtStrategy,
     JwtAuthGuard,
+    OptionalAuthGuard,
+    ModeratorGuard,
+    AdminGuard,
     ThrottledAuthGuard,
     RateLimitGuard,
     {
-      provide: 'SUPABASE_AUTH_STRATEGY',
+      provide: SupabaseAuthStrategy,
       useFactory: (configService: ConfigService) => {
         const supabaseUrl = configService.get<string>('SUPABASE_URL');
         const supabaseKey = configService.get<string>('SUPABASE_KEY');
@@ -78,6 +84,9 @@ import { JwtAuthGuard } from './guards/jwt-auth.guard';
     PassportModule,
     JwtModule,
     JwtAuthGuard,
+    OptionalAuthGuard,
+    ModeratorGuard,
+    AdminGuard,
     ThrottledAuthGuard,
     RateLimitGuard,
   ],

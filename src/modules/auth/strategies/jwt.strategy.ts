@@ -3,7 +3,7 @@ import { PassportStrategy } from '@nestjs/passport';
 import { ExtractJwt, Strategy } from 'passport-jwt';
 import { ConfigService } from '@nestjs/config';
 import { SupabaseAuthService } from '../../../libs/supabase/auth/supabase-auth.service';
-import { PrismaService } from '../../../libs/supabase/db/prisma.service';
+import { PrismaService } from '../../../libs/db/prisma.service';
 import { AUTH_CONSTANTS } from '../constants/auth.constants';
 
 interface JwtPayload {
@@ -65,7 +65,7 @@ export class JwtStrategy extends PassportStrategy(Strategy) {
 
       if (!supabaseUser) {
         throw new UnauthorizedException('Invalid token');
-      }      // Get user from database using supabaseId instead of id
+      } // Get user from database using supabaseId instead of id
       const dbUser = await this.prisma.user.findUnique({
         where: { supabaseId: payload.sub },
         include: {

@@ -2,7 +2,7 @@ import { Injectable, CanActivate, ExecutionContext } from '@nestjs/common';
 import { AuthGuard } from '@nestjs/passport';
 
 @Injectable()
-export class OptionalAuthGuard extends AuthGuard('SUPABASE_AUTH') implements CanActivate {
+export class OptionalAuthGuard extends AuthGuard('jwt') implements CanActivate {
   canActivate(context: ExecutionContext) {
     // Allow both authenticated and unauthenticated requests
     return super.canActivate(context);

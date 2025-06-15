@@ -23,8 +23,8 @@ export interface ChatParticipantInfo {
   role: ChatRole;
   flags: number;
   joinedAt: Date;
-  leftAt?: Date;
-  mutedUntil?: Date;
+  leftAt: Date | null;
+  mutedUntil: Date | null;
   user: UserInfo;
 }
 

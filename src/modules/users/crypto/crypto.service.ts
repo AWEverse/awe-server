@@ -12,7 +12,7 @@ import {
   KeyBundleResponse,
   KeyStatusResponse,
 } from './dto/crypto.dto';
-import { PrismaService } from '../../../libs/supabase/db/prisma.service';
+import { PrismaService } from '../../../libs/db/prisma.service';
 
 @Injectable()
 export class CryptoService {

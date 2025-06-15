@@ -3,8 +3,8 @@ import { AppModule } from './app.module';
 import { BigIntInterceptor } from './modules/common/interceptors/bigint.interceptor';
 import { ValidationPipe } from '@nestjs/common';
 import { ready } from 'libsodium-wrappers';
-import { DocumentBuilder, SwaggerModule } from '@nestjs/swagger';
 import { Logger, ValidationError } from '@nestjs/common';
+import { SwaggerConfig } from './modules/common/swagger';
 
 const compression = require('compression');
 const helmet = require('helmet');
@@ -21,7 +21,7 @@ const helmet = require('helmet');
           ? ['error', 'warn']
           : ['log', 'error', 'warn', 'debug', 'verbose'],
       bufferLogs: true,
-      cors: false,
+      cors: true, // Enable basic CORS first
     });
 
     app.use(
@@ -66,26 +66,34 @@ const helmet = require('helmet');
 
     app.useGlobalInterceptors(new BigIntInterceptor());
 
+    // CORS debugging middleware (only in development)
+    if (process.env.NODE_ENV !== 'production') {
+      app.use((req: any, res: any, next: any) => {
+        const origin = req.headers.origin;
+        if (req.method === 'OPTIONS' || origin) {
+          logger.log(
+            `CORS Request: ${req.method} ${req.url} from origin: ${origin || 'no-origin'}`,
+          );
+        }
+        next();
+      });
+    }
+
     app.enableCors({
       origin:
         process.env.NODE_ENV === 'production'
           ? process.env.FRONTEND_URL?.split(',') || false
-          : true,
+          : true, // Allow all origins in development
       credentials: true,
-      methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH'],
-      allowedHeaders: ['Content-Type', 'Authorization'],
-      maxAge: 86400, // 24 часа
+      methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS'],
+      allowedHeaders: ['Content-Type', 'Authorization', 'Accept', 'Origin', 'X-Requested-With'],
+      preflightContinue: false,
+      optionsSuccessStatus: 204,
+      maxAge: 86400, // 24 hours
     });
 
     if (process.env.NODE_ENV !== 'production') {
-      const config = new DocumentBuilder()
-        .setTitle('AWE API')
-        .setDescription('Advanced Multimedia Platform API')
-        .setVersion('1.0')
-        .addBearerAuth()
-        .build();
-      const document = SwaggerModule.createDocument(app, config);
-      SwaggerModule.setup('api', app, document);
+      SwaggerConfig.setup(app);
     }
 
     const server = app.getHttpServer();

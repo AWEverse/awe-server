@@ -1,5 +1,5 @@
 import { Injectable, CanActivate, ExecutionContext, ForbiddenException } from '@nestjs/common';
-import { PrismaService } from '../../../libs/supabase/db/prisma.service';
+import { PrismaService } from '../../../libs/db/prisma.service';
 
 @Injectable()
 export class ModeratorGuard implements CanActivate {
@@ -18,7 +18,7 @@ export class ModeratorGuard implements CanActivate {
       include: { role: true },
     });
 
-    if (!dbUser || !['ADMIN', 'MODERATOR'].includes(dbUser.role.name)) {
+    if (!dbUser || !dbUser.role || !['ADMIN', 'MODERATOR'].includes(dbUser.role.name)) {
       throw new ForbiddenException('Moderator access required');
     }
 

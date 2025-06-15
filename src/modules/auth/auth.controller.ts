@@ -12,6 +12,8 @@ import {
   Param,
   UsePipes,
   ValidationPipe,
+  Headers,
+  Ip,
 } from '@nestjs/common';
 import { AuthService } from './auth.service';
 import { JwtAuthGuard } from './guards/jwt-auth.guard';
@@ -26,6 +28,10 @@ import {
   ChangePasswordDto,
   EmailVerificationDto,
   ResendVerificationDto,
+  RegisterResponseDto,
+  LoginResponseDto,
+  AuthProfileResponseDto,
+  LogoutResponseDto,
 } from './dto';
 import { UserRequest } from './types';
 import {
@@ -46,9 +52,16 @@ import {
   OAuthResponse,
   SessionsResponse,
 } from './types/auth-response.types';
+import {
+  ApiPublicEndpoint,
+  ApiSecureEndpoint,
+  ApiCreatedResponse,
+  ApiSuccessResponse,
+  ApiNotFoundResponse,
+} from '../common/swagger';
 
 @UseInterceptors(ResponseInterceptor)
-@ApiTags('Authentication')
+@ApiTags('Auth')
 @Controller('auth')
 export class AuthController {
   private readonly logger = new Logger(AuthController.name);
@@ -56,58 +69,56 @@ export class AuthController {
   constructor(private readonly authService: AuthService) {
     this.logger.log('Auth Controller initialized');
   }
-
   @Post('register')
   @Public()
   @UseGuards(RateLimitGuard)
   @UsePipes(new ValidationPipe({ whitelist: true, transform: true }))
   @HttpCode(HttpStatus.CREATED)
-  @ApiOperation({
-    summary: 'Register a new user',
-    description: 'Create a new user account with email, password, and username',
-  })
+  @ApiPublicEndpoint(
+    'Регистрация нового пользователя',
+    'Создание новой учетной записи пользователя с email, паролем и именем пользователя',
+  )
   @ApiBody({ type: RegisterDto })
+  @ApiCreatedResponse('Пользователь успешно зарегистрирован', RegisterResponseDto)
   @ApiResponse({
-    status: HttpStatus.CREATED,
-    description: 'User registered successfully',
+    status: HttpStatus.CONFLICT,
+    description: 'Email или имя пользователя уже существует',
     schema: {
       type: 'object',
       properties: {
-        user: {
-          type: 'object',
-          properties: {
-            id: { type: 'string' },
-            email: { type: 'string' },
-            username: { type: 'string' },
-            fullName: { type: 'string' },
-            emailVerified: { type: 'boolean' },
-          },
-        },
-        message: { type: 'string' },
-        requiresEmailVerification: { type: 'boolean' },
+        statusCode: { type: 'number', example: 409 },
+        message: { type: 'string', example: 'Email already exists' },
+        error: { type: 'string', example: 'Conflict' },
       },
     },
   })
   @ApiResponse({
-    status: HttpStatus.CONFLICT,
-    description: 'Email or username already exists',
-  })
-  @ApiResponse({
-    status: HttpStatus.BAD_REQUEST,
-    description: 'Invalid input data',
-  })
-  @ApiResponse({
     status: HttpStatus.TOO_MANY_REQUESTS,
-    description: 'Too many registration attempts',
+    description: 'Слишком много попыток регистрации',
+    schema: {
+      type: 'object',
+      properties: {
+        statusCode: { type: 'number', example: 429 },
+        message: { type: 'string', example: 'Too many requests' },
+        error: { type: 'string', example: 'Too Many Requests' },
+      },
+    },
   })
-  async register(@Body() body: RegisterDto): Promise<RegisterResponse> {
+  async register(
+    @Body() body: RegisterDto,
+    @Headers('user-agent') userAgent?: string,
+    @Ip() ipAddress?: string,
+  ): Promise<RegisterResponse> {
     try {
-      this.logger.log(`Registration attempt for email: ${body.email}`);
+      this.logger.log(`Registration attempt for email: ${body.email} from IP: ${ipAddress}`);
       const result = await this.authService.register(
         body.email,
         body.password,
         body.username,
         body.fullName,
+        body.deviceToken,
+        body.userAgent || userAgent, // Use provided or fallback to header
+        body.fingerprint,
       );
       this.logger.log(`Registration successful for email: ${body.email}`);
       return result;
@@ -116,55 +127,55 @@ export class AuthController {
       throw error;
     }
   }
-
   @Post('login')
   @Public()
   @UseGuards(RateLimitGuard)
   @UsePipes(new ValidationPipe({ whitelist: true, transform: true }))
   @HttpCode(HttpStatus.OK)
-  @ApiOperation({
-    summary: 'Login user',
-    description: 'Authenticate user with email and password',
-  })
+  @ApiPublicEndpoint(
+    'Авторизация пользователя',
+    'Аутентификация пользователя с помощью email и пароля',
+  )
   @ApiBody({ type: LoginDto })
+  @ApiSuccessResponse('Пользователь успешно авторизован', LoginResponseDto)
   @ApiResponse({
-    status: HttpStatus.OK,
-    description: 'User logged in successfully',
+    status: HttpStatus.UNAUTHORIZED,
+    description: 'Неверные учетные данные',
     schema: {
       type: 'object',
       properties: {
-        user: {
-          type: 'object',
-          properties: {
-            id: { type: 'string' },
-            email: { type: 'string' },
-            username: { type: 'string' },
-            fullName: { type: 'string' },
-            role: { type: 'object' },
-            emailVerified: { type: 'boolean' },
-            createdAt: { type: 'string', format: 'date-time' },
-            updatedAt: { type: 'string', format: 'date-time' },
-          },
-        },
-        accessToken: { type: 'string' },
-        refreshToken: { type: 'string' },
-        expiresAt: { type: 'number' },
-        tokenType: { type: 'string', example: 'Bearer' },
+        statusCode: { type: 'number', example: 401 },
+        message: { type: 'string', example: 'Invalid credentials' },
+        error: { type: 'string', example: 'Unauthorized' },
       },
     },
   })
   @ApiResponse({
-    status: HttpStatus.UNAUTHORIZED,
-    description: 'Invalid credentials',
-  })
-  @ApiResponse({
     status: HttpStatus.TOO_MANY_REQUESTS,
-    description: 'Too many login attempts',
+    description: 'Слишком много попыток входа',
+    schema: {
+      type: 'object',
+      properties: {
+        statusCode: { type: 'number', example: 429 },
+        message: { type: 'string', example: 'Too many requests' },
+        error: { type: 'string', example: 'Too Many Requests' },
+      },
+    },
   })
-  async login(@Body() body: LoginDto): Promise<LoginResponse> {
+  async login(
+    @Body() body: LoginDto,
+    @Headers('user-agent') userAgent?: string,
+    @Ip() ipAddress?: string,
+  ): Promise<LoginResponse> {
     try {
-      this.logger.log(`Login attempt for email: ${body.email}`);
-      const result = await this.authService.login(body.email, body.password, body.rememberMe);
+      this.logger.log(`Login attempt for email: ${body.email} from IP: ${ipAddress}`);
+      const result = await this.authService.login(
+        body.email,
+        body.password,
+        body.deviceToken,
+        body.userAgent || userAgent, // Use provided or fallback to header
+        body.fingerprint,
+      );
       this.logger.log(`Login successful for email: ${body.email}`);
       return result;
     } catch (error) {
@@ -172,50 +183,36 @@ export class AuthController {
       throw error;
     }
   }
-
   @Post('refresh')
   @Public()
   @UsePipes(new ValidationPipe({ whitelist: true, transform: true }))
   @HttpCode(HttpStatus.OK)
-  @ApiOperation({
-    summary: 'Refresh access token',
-    description: 'Get a new access token using refresh token',
-  })
+  @ApiPublicEndpoint(
+    'Обновление токена доступа',
+    'Получение нового токена доступа с помощью refresh token',
+  )
   @ApiBody({ type: RefreshTokenDto })
+  @ApiSuccessResponse('Токен успешно обновлен', LoginResponseDto)
   @ApiResponse({
-    status: HttpStatus.OK,
-    description: 'Token refreshed successfully',
+    status: HttpStatus.UNAUTHORIZED,
+    description: 'Неверный или истекший refresh token',
     schema: {
       type: 'object',
       properties: {
-        user: {
-          type: 'object',
-          properties: {
-            id: { type: 'string' },
-            email: { type: 'string' },
-            username: { type: 'string' },
-            fullName: { type: 'string' },
-            role: { type: 'object' },
-            emailVerified: { type: 'boolean' },
-            createdAt: { type: 'string', format: 'date-time' },
-            updatedAt: { type: 'string', format: 'date-time' },
-          },
-        },
-        accessToken: { type: 'string' },
-        refreshToken: { type: 'string' },
-        expiresAt: { type: 'number' },
-        tokenType: { type: 'string', example: 'Bearer' },
+        statusCode: { type: 'number', example: 401 },
+        message: { type: 'string', example: 'Invalid or expired refresh token' },
+        error: { type: 'string', example: 'Unauthorized' },
       },
     },
-  })
-  @ApiResponse({
-    status: HttpStatus.UNAUTHORIZED,
-    description: 'Invalid or expired refresh token',
   })
   async refresh(@Body() body: RefreshTokenDto): Promise<LoginResponse> {
     try {
       this.logger.log('Token refresh attempt');
-      const result = await this.authService.refresh(body.refreshToken);
+      const result = await this.authService.refresh(
+        body.refreshToken,
+        body.fingerprint,
+        body.userAgent,
+      );
       this.logger.log('Token refresh successful');
       return result;
     } catch (error) {
@@ -223,23 +220,12 @@ export class AuthController {
       throw error;
     }
   }
-
   @Post('logout')
   @UseGuards(JwtAuthGuard)
-  @ApiBearerAuth()
+  @ApiBearerAuth('JWT-auth')
   @HttpCode(HttpStatus.OK)
-  @ApiOperation({
-    summary: 'Logout user',
-    description: 'Invalidate user session and tokens',
-  })
-  @ApiResponse({
-    status: HttpStatus.OK,
-    description: 'User logged out successfully',
-  })
-  @ApiResponse({
-    status: HttpStatus.UNAUTHORIZED,
-    description: 'Invalid or missing token',
-  })
+  @ApiSecureEndpoint('Выход из системы', 'Аннулирование пользовательской сессии и токенов')
+  @ApiSuccessResponse('Пользователь успешно вышел из системы')
   async logout(@Request() req: UserRequest): Promise<{ message: string }> {
     try {
       this.logger.log(`Logout attempt for user: ${req.user.id}`);
@@ -251,42 +237,15 @@ export class AuthController {
       throw error;
     }
   }
-
   @Get('profile')
   @UseGuards(JwtAuthGuard)
-  @ApiBearerAuth()
-  @ApiOperation({
-    summary: 'Get user profile',
-    description: 'Retrieve current user profile information',
-  })
-  @ApiResponse({
-    status: HttpStatus.OK,
-    description: 'User profile retrieved successfully',
-    schema: {
-      type: 'object',
-      properties: {
-        id: { type: 'string' },
-        email: { type: 'string' },
-        username: { type: 'string' },
-        fullName: { type: 'string' },
-        avatarUrl: { type: 'string' },
-        role: { type: 'object' },
-        emailVerified: { type: 'boolean' },
-        twoFactorEnabled: { type: 'boolean' },
-        lastLoginAt: { type: 'string', format: 'date-time' },
-        createdAt: { type: 'string', format: 'date-time' },
-        updatedAt: { type: 'string', format: 'date-time' },
-      },
-    },
-  })
-  @ApiResponse({
-    status: HttpStatus.UNAUTHORIZED,
-    description: 'Invalid or missing token',
-  })
-  @ApiResponse({
-    status: HttpStatus.NOT_FOUND,
-    description: 'User not found',
-  })
+  @ApiBearerAuth('JWT-auth')
+  @ApiSecureEndpoint(
+    'Получение профиля пользователя',
+    'Получение информации о профиле текущего пользователя',
+  )
+  @ApiSuccessResponse('Профиль пользователя успешно получен', AuthProfileResponseDto)
+  @ApiNotFoundResponse('Пользователь')
   async getProfile(@Request() req: UserRequest): Promise<ProfileResponse> {
     try {
       this.logger.log(`Profile request for user: ${req.user.id}`);
@@ -372,7 +331,7 @@ export class AuthController {
 
   @Post('change-password')
   @UseGuards(JwtAuthGuard)
-  @ApiBearerAuth()
+  @ApiBearerAuth('JWT-auth')
   @UsePipes(new ValidationPipe({ whitelist: true, transform: true }))
   @HttpCode(HttpStatus.OK)
   @ApiOperation({
@@ -525,7 +484,7 @@ export class AuthController {
 
   @Get('sessions')
   @UseGuards(JwtAuthGuard)
-  @ApiBearerAuth()
+  @ApiBearerAuth('JWT-auth')
   @ApiOperation({
     summary: 'Get user sessions',
     description: 'Retrieve all active sessions for the current user',
@@ -578,7 +537,7 @@ export class AuthController {
 
   @Post('sessions/:sessionId/revoke')
   @UseGuards(JwtAuthGuard)
-  @ApiBearerAuth()
+  @ApiBearerAuth('JWT-auth')
   @HttpCode(HttpStatus.OK)
   @ApiOperation({
     summary: 'Revoke session',
@@ -623,7 +582,7 @@ export class AuthController {
 
   @Post('sessions/revoke-all')
   @UseGuards(JwtAuthGuard)
-  @ApiBearerAuth()
+  @ApiBearerAuth('JWT-auth')
   @HttpCode(HttpStatus.OK)
   @ApiOperation({
     summary: 'Revoke all sessions',
@@ -648,5 +607,14 @@ export class AuthController {
       this.logger.error(`Failed to revoke all sessions for user ${req.user?.id}:`, error.message);
       throw error;
     }
+  }
+
+  // Простой тестовый эндпоинт для диагностики
+  @Get('test')
+  @Public()
+  @HttpCode(HttpStatus.OK)
+  async test(): Promise<{ message: string }> {
+    this.logger.log('Test endpoint called');
+    return { message: 'Test endpoint works!' };
   }
 }

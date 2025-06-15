@@ -26,7 +26,7 @@ import {
   SendCustomEmojiDto,
 } from '../dto/realtime.dto';
 import { MessageType, ChatType } from '../types';
-import { PrismaService } from '../../../libs/supabase/db/prisma.service';
+import { PrismaService } from '../../../libs/db/prisma.service';
 import { JwtService } from '@nestjs/jwt';
 
 interface AuthenticatedSocket extends Socket {
@@ -154,7 +154,7 @@ export class MessangerGateway implements OnGatewayInit, OnGatewayConnection, OnG
       await this.verifyUserChatAccess(client.userId, BigInt(chatId));
 
       // Content is required for regular messages
-      if (!content && !data.stickerId && !data.gifId && !data.customEmojiId) {
+      if (!content) {
         throw new Error('Message content or media is required');
       }
 

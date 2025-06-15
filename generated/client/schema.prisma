@@ -192,6 +192,7 @@ model User {
   id          BigInt  @id @default(autoincrement())
   email       String  @unique @db.VarChar(320) // RFC 5321 compliant
   username    String  @unique @db.VarChar(32)
+  password    String  @db.VarChar(128) // Хэш пароля
   supabaseId  String? @unique @db.VarChar(36) // Supabase UUID
   fullName    String? @db.VarChar(128)
   bio         String? @db.VarChar(500)
@@ -209,7 +210,7 @@ model User {
   createdAt DateTime  @default(now()) @db.Timestamptz(3)
   updatedAt DateTime  @updatedAt @db.Timestamptz(3)
   deletedAt DateTime? @db.Timestamptz(3)
-  roleId    BigInt    @default(1)
+  roleId    BigInt? // Nullable, по умолчанию простой пользователь
 
   // Полнотекстовый поиск (PostgreSQL tsvector для оптимального поиска)
   searchVector Unsupported("tsvector")?
@@ -226,7 +227,7 @@ model User {
   reputation         Int    @default(0) // Для форума
 
   // Связи
-  role                   RoleGlobally            @relation(fields: [roleId], references: [id])
+  role                   RoleGlobally?           @relation(fields: [roleId], references: [id])
   devices                Device[]
   sessions               Session[]
   chatsCreated           Chat[]                  @relation("chatsCreated")
@@ -304,12 +305,13 @@ model User {
 model Device {
   id            BigInt    @id @default(autoincrement())
   userId        BigInt
-  deviceId      String    @unique @db.VarChar(64)
+  deviceId      String    @unique
   deviceName    String?   @db.VarChar(64)
   deviceType    String?   @db.VarChar(32)
   deviceVersion String?   @db.VarChar(32)
   ipAddress     String?   @db.Inet
   userAgent     String?   @db.VarChar(512) // Увеличено для современных UA
+  fingerprint   String?   @db.VarChar(256) // Уникальный отпечаток устройства
   flags         Int       @default(1) // isActive(1), trusted(2)
   lastUsed      DateTime? @db.Timestamptz(3)
   createdAt     DateTime  @default(now()) @db.Timestamptz(3)
@@ -326,8 +328,8 @@ model Device {
 
 model Session {
   id           BigInt    @id @default(autoincrement())
-  userId       BigInt
-  deviceId     BigInt
+  userId       BigInt    @unique
+  deviceId     BigInt    @unique
   ratchetState Bytes
   sessionKey   String?   @db.VarChar(256)
   expiresAt    DateTime? @db.Timestamptz(3)
@@ -335,8 +337,9 @@ model Session {
   updatedAt    DateTime  @updatedAt @db.Timestamptz(3)
   flags        Int       @default(1) // isActive(1)
 
-  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
-  device Device @relation(fields: [deviceId], references: [id], onDelete: Cascade)
+  user         User           @relation(fields: [userId], references: [id], onDelete: Cascade)
+  device       Device         @relation(fields: [deviceId], references: [id], onDelete: Cascade)
+  RefreshToken RefreshToken[]
 
   @@index([userId])
   @@index([deviceId])
@@ -620,10 +623,10 @@ model MessageReaction {
 }
 
 model MessageRead {
-  id        BigInt   @id @default(autoincrement())
+  id        BigInt    @id @default(autoincrement())
   messageId BigInt
   userId    BigInt
-  readAt    DateTime @default(now()) @db.Timestamptz(3)
+  readAt    DateTime? @db.Timestamptz(3)
 
   message Message @relation(fields: [messageId], references: [id], onDelete: Cascade)
   user    User    @relation(fields: [userId], references: [id], onDelete: Cascade)
@@ -1594,23 +1597,29 @@ model Report {
 
 model RefreshToken {
   id        BigInt   @id @default(autoincrement())
-  userId    BigInt
+  sessionId BigInt
+  userId    BigInt   @unique
   token     String   @unique @db.VarChar(255)
+  tokenHash String   @unique @db.VarChar(255) // Хеш токена для безопасности
   expiresAt DateTime @db.Timestamptz(3)
   createdAt DateTime @default(now()) @db.Timestamptz(3)
   updatedAt DateTime @updatedAt @db.Timestamptz(3)
-  deviceId  String?  @db.VarChar(64) // Optional device identifier
+  deviceId  String?  @unique
   ipAddress String?  @db.Inet
   userAgent String?  @db.VarChar(512)
   isRevoked Boolean  @default(false)
+  isUsed    Boolean  @default(false) // For reuse detection (Signal/Stripe pattern)
 
-  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+  session Session @relation(fields: [sessionId], references: [id])
+  user    User    @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@index([userId])
   @@index([expiresAt])
   @@index([token])
   @@index([isRevoked])
+  @@index([isUsed])
   @@index([userId, isRevoked])
+  @@index([userId, isUsed])
 }
 
 model RefreshTokenBlacklist {

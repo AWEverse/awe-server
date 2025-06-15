@@ -1,7 +1,7 @@
 // Система мониторинга и метрик для мессенджера
 import { Injectable, Logger } from '@nestjs/common';
 import { Cron, CronExpression } from '@nestjs/schedule';
-import { PrismaService } from '../../../libs/supabase/db/prisma.service';
+import { PrismaService } from '../../../libs/db/prisma.service';
 import { EventEmitter2 } from '@nestjs/event-emitter';
 
 interface PerformanceMetrics {
