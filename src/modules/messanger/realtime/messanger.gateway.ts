@@ -21,27 +21,30 @@ import {
   OnlineStatusDto,
   JoinChatDto,
   LeaveChatDto,
-  SendStickerDto,
-  SendGifDto,
-  SendCustomEmojiDto,
 } from '../dto/realtime.dto';
-import { MessageType, ChatType } from '../types';
-import { PrismaService } from '../../../libs/db/prisma.service';
+import { MessageType } from '../types';
 import { JwtService } from '@nestjs/jwt';
+import { WEBSOCKET_CONFIG } from './websocket.config';
+import { WebSocketRateLimiter } from './websocket-rate-limiter.service';
+import { WebSocketMonitor } from './websocket-monitor.service';
 
 interface AuthenticatedSocket extends Socket {
   userId: bigint;
   username: string;
-  deviceId?: string;
 }
 
 interface SocketUserInfo {
   userId: bigint;
   username: string;
   socketId: string;
-  lastSeen: Date;
-  isOnline: boolean;
+  lastActivity: number;
   chatRooms: Set<string>;
+}
+
+interface ConnectionPool {
+  connectedUsers: Map<string, SocketUserInfo>; // socketId -> userInfo
+  userSockets: Map<string, Set<string>>; // userId -> Set of socketIds
+  typingUsers: Map<string, Set<string>>; // chatId -> Set of userIds typing
 }
 
 @Injectable()
@@ -50,31 +53,50 @@ interface SocketUserInfo {
     origin: process.env.FRONTEND_URL || 'http://localhost:3000',
     credentials: true,
   },
-  namespace: '/messenger',
+  namespace: '/messenger-realtime',
+  pingTimeout: WEBSOCKET_CONFIG.PING_TIMEOUT,
+  pingInterval: WEBSOCKET_CONFIG.PING_INTERVAL,
+  maxHttpBufferSize: WEBSOCKET_CONFIG.MAX_HTTP_BUFFER_SIZE,
+  transports: WEBSOCKET_CONFIG.WEBSOCKET_ONLY ? ['websocket'] : ['websocket', 'polling'],
+  compression: WEBSOCKET_CONFIG.ENABLE_COMPRESSION,
 })
 export class MessangerGateway implements OnGatewayInit, OnGatewayConnection, OnGatewayDisconnect {
   @WebSocketServer()
   server: Server;
 
   private readonly logger = new Logger(MessangerGateway.name);
-  private connectedUsers = new Map<string, SocketUserInfo>(); // socketId -> userInfo
-  private userSockets = new Map<string, Set<string>>(); // userId -> Set of socketIds
-  private chatRooms = new Map<string, Set<string>>(); // chatId -> Set of socketIds
 
+  // Optimized connection pool
+  private readonly connectionPool: ConnectionPool = {
+    connectedUsers: new Map(),
+    userSockets: new Map(),
+    typingUsers: new Map(),
+  };
+
+  // Timers for cleanup and broadcasting
+  private cleanupInterval: NodeJS.Timeout;
+  private typingCleanupInterval: NodeJS.Timeout;
   constructor(
     private readonly messengerService: MessangerService,
-    private readonly prisma: PrismaService,
     private readonly jwtService: JwtService,
+    private readonly rateLimiter: WebSocketRateLimiter,
+    private readonly monitor: WebSocketMonitor,
   ) {}
+  afterInit(_server: Server) {
+    this.logger.log('WebSocket Gateway initialized with optimizations');
 
-  afterInit(server: Server) {
-    this.logger.log('WebSocket Gateway initialized');
+    // Optimized cleanup intervals using config
+    this.cleanupInterval = setInterval(
+      () => this.cleanupStaleConnections(),
+      WEBSOCKET_CONFIG.CLEANUP_INTERVAL,
+    );
+    this.typingCleanupInterval = setInterval(
+      () => this.cleanupTypingIndicators(),
+      WEBSOCKET_CONFIG.TYPING_CLEANUP_INTERVAL,
+    );
 
-    // Setup periodic cleanup of stale connections
-    setInterval(() => this.cleanupStaleConnections(), 30000); // Every 30 seconds
-
-    // Setup periodic online status broadcast
-    setInterval(() => this.broadcastOnlineUsers(), 60000); // Every minute
+    // Start monitoring
+    this.monitor.startPeriodicLogging();
   }
 
   async handleConnection(client: AuthenticatedSocket) {
@@ -96,11 +118,12 @@ export class MessangerGateway implements OnGatewayInit, OnGatewayConnection, OnG
 
       // Attach user info to socket
       client.userId = BigInt(payload.sub);
-      client.username = payload.username;
-      client.deviceId = payload.deviceId;
+      client.username = payload.username; // Register user connection efficiently
+      this.registerUserConnection(client);
 
-      // Register user connection
-      await this.registerUserConnection(client);
+      // Update metrics
+      this.monitor.updateConnectionCount(this.connectionPool.connectedUsers.size);
+      this.monitor.updateActiveUsers(this.connectionPool.userSockets.size);
 
       this.logger.log(`User ${client.username} (${client.userId}) connected from ${client.id}`);
 
@@ -111,58 +134,70 @@ export class MessangerGateway implements OnGatewayInit, OnGatewayConnection, OnG
         socketId: client.id,
       });
 
-      // Broadcast online status to user's contacts
-      await this.broadcastUserOnlineStatus(client.userId, true);
+      // Auto-join user to their active chats (optimized)
+      await this.autoJoinUserChats(client);
     } catch (error) {
       this.logger.error('Connection error:', error);
       client.emit('error', { message: 'Connection failed' });
       client.disconnect();
     }
   }
-
   async handleDisconnect(client: AuthenticatedSocket) {
     if (client.userId) {
-      await this.unregisterUserConnection(client);
+      this.unregisterUserConnection(client);
+
+      // Update metrics
+      this.monitor.updateConnectionCount(this.connectionPool.connectedUsers.size);
+      this.monitor.updateActiveUsers(this.connectionPool.userSockets.size);
 
       this.logger.log(`User ${client.username} (${client.userId}) disconnected from ${client.id}`);
-
-      // Check if user has other active connections
-      const userSocketIds = this.userSockets.get(client.userId.toString());
-      if (!userSocketIds || userSocketIds.size === 0) {
-        // User is completely offline
-        await this.broadcastUserOnlineStatus(client.userId, false);
-        await this.updateUserLastSeen(client.userId);
-      }
     }
   }
 
   // ===============================================
-  // MESSAGE HANDLING
+  // CORE MESSAGE HANDLING (OPTIMIZED)
   // ===============================================
-
   @SubscribeMessage('send_message')
   @UseGuards(WsJwtGuard)
-  @UsePipes(new ValidationPipe())
+  @UsePipes(new ValidationPipe({ transform: true }))
   async handleSendMessage(
     @ConnectedSocket() client: AuthenticatedSocket,
     @MessageBody() data: SendMessageDto,
   ) {
     try {
+      // Check rate limit
+      if (!this.rateLimiter.checkLimit(client.userId.toString(), 'message')) {
+        this.monitor.incrementRateLimitViolation();
+        throw new Error('Message rate limit exceeded');
+      }
+
+      // Update message metrics
+      this.monitor.incrementMessageCount();
+
       const { chatId, content, messageType = MessageType.TEXT, replyToId, threadId } = data;
+      if (!content?.trim()) {
+        throw new Error('Message content is required');
+      }
 
-      // Verify user has access to chat
-      await this.verifyUserChatAccess(client.userId, BigInt(chatId));
+      // Validate message length
+      if (content.length > WEBSOCKET_CONFIG.MAX_MESSAGE_LENGTH) {
+        throw new Error(
+          `Message too long. Maximum ${WEBSOCKET_CONFIG.MAX_MESSAGE_LENGTH} characters allowed`,
+        );
+      }
 
-      // Content is required for regular messages
-      if (!content) {
-        throw new Error('Message content or media is required');
+      // Validate attachments count
+      if (data.attachments && data.attachments.length > WEBSOCKET_CONFIG.MAX_ATTACHMENTS) {
+        throw new Error(
+          `Too many attachments. Maximum ${WEBSOCKET_CONFIG.MAX_ATTACHMENTS} allowed`,
+        );
       }
 
       // Send message through service
       const result = await this.messengerService.sendMessage(
         BigInt(chatId),
         client.userId,
-        content || '',
+        content,
         messageType,
         {
           replyToId: replyToId ? BigInt(replyToId) : undefined,
@@ -171,8 +206,8 @@ export class MessangerGateway implements OnGatewayInit, OnGatewayConnection, OnG
         },
       );
 
-      // Broadcast message to all chat participants
-      await this.broadcastToChatRoom(chatId, 'new_message', {
+      // Efficient broadcast to chat room
+      this.broadcastToChatRoom(chatId, 'new_message', {
         ...result,
         chatId: chatId,
       });
@@ -183,9 +218,6 @@ export class MessangerGateway implements OnGatewayInit, OnGatewayConnection, OnG
         messageId: result.id,
         timestamp: result.createdAt,
       });
-
-      // Update chat's last message timestamp
-      await this.updateChatLastActivity(BigInt(chatId));
 
       return { success: true, data: result };
     } catch (error) {
@@ -200,7 +232,7 @@ export class MessangerGateway implements OnGatewayInit, OnGatewayConnection, OnG
 
   @SubscribeMessage('edit_message')
   @UseGuards(WsJwtGuard)
-  @UsePipes(new ValidationPipe())
+  @UsePipes(new ValidationPipe({ transform: true }))
   async handleEditMessage(
     @ConnectedSocket() client: AuthenticatedSocket,
     @MessageBody() data: EditMessageDto,
@@ -214,10 +246,10 @@ export class MessangerGateway implements OnGatewayInit, OnGatewayConnection, OnG
       );
 
       // Get chat ID for message
-      const message = await this.getMessageWithChatId(BigInt(messageId));
+      const message = await this.messengerService.getMessageById(BigInt(messageId));
 
       // Broadcast edit to all chat participants
-      await this.broadcastToChatRoom(message.chatId.toString(), 'message_edited', {
+      this.broadcastToChatRoom(message.chatId.toString(), 'message_edited', {
         messageId,
         content,
         editedAt: result.editedAt,
@@ -238,6 +270,8 @@ export class MessangerGateway implements OnGatewayInit, OnGatewayConnection, OnG
   ) {
     try {
       const { messageId, forEveryone = false } = data;
+      const message = await this.messengerService.getMessageById(BigInt(messageId));
+
       const result = await this.messengerService.deleteMessage(
         BigInt(messageId),
         client.userId,
@@ -245,10 +279,8 @@ export class MessangerGateway implements OnGatewayInit, OnGatewayConnection, OnG
       );
 
       if (result) {
-        const message = await this.getMessageWithChatId(BigInt(messageId));
-
         // Broadcast deletion to all chat participants
-        await this.broadcastToChatRoom(message.chatId.toString(), 'message_deleted', {
+        this.broadcastToChatRoom(message.chatId.toString(), 'message_deleted', {
           messageId,
           forEveryone,
           deletedBy: client.userId.toString(),
@@ -263,47 +295,32 @@ export class MessangerGateway implements OnGatewayInit, OnGatewayConnection, OnG
   }
 
   // ===============================================
-  // CHAT ROOM MANAGEMENT
+  // CHAT ROOM MANAGEMENT (OPTIMIZED)
   // ===============================================
 
   @SubscribeMessage('join_chat')
   @UseGuards(WsJwtGuard)
-  @UsePipes(new ValidationPipe())
+  @UsePipes(new ValidationPipe({ transform: true }))
   async handleJoinChat(
     @ConnectedSocket() client: AuthenticatedSocket,
     @MessageBody() data: JoinChatDto,
   ) {
     try {
       const { chatId } = data;
-
-      // Verify user has access to chat
-      await this.verifyUserChatAccess(client.userId, BigInt(chatId));
+      const roomName = `chat_${chatId}`;
 
       // Join socket to chat room
-      const roomName = `chat_${chatId}`;
       await client.join(roomName);
 
       // Update user's chat rooms
-      const userInfo = this.connectedUsers.get(client.id);
+      const userInfo = this.connectionPool.connectedUsers.get(client.id);
       if (userInfo) {
         userInfo.chatRooms.add(roomName);
+        userInfo.lastActivity = Date.now();
       }
-
-      // Update chat room participants
-      if (!this.chatRooms.has(chatId)) {
-        this.chatRooms.set(chatId, new Set());
-      }
-      this.chatRooms.get(chatId)!.add(client.id);
 
       // Mark messages as read
-      await this.markMessagesAsRead(BigInt(chatId), client.userId);
-
-      // Notify other participants
-      client.to(roomName).emit('user_joined_chat', {
-        chatId,
-        userId: client.userId.toString(),
-        username: client.username,
-      });
+      await this.messengerService.markMessagesAsRead(BigInt(chatId), client.userId);
 
       this.logger.log(`User ${client.username} joined chat ${chatId}`);
 
@@ -316,7 +333,7 @@ export class MessangerGateway implements OnGatewayInit, OnGatewayConnection, OnG
 
   @SubscribeMessage('leave_chat')
   @UseGuards(WsJwtGuard)
-  @UsePipes(new ValidationPipe())
+  @UsePipes(new ValidationPipe({ transform: true }))
   async handleLeaveChat(
     @ConnectedSocket() client: AuthenticatedSocket,
     @MessageBody() data: LeaveChatDto,
@@ -329,26 +346,11 @@ export class MessangerGateway implements OnGatewayInit, OnGatewayConnection, OnG
       await client.leave(roomName);
 
       // Update user's chat rooms
-      const userInfo = this.connectedUsers.get(client.id);
+      const userInfo = this.connectionPool.connectedUsers.get(client.id);
       if (userInfo) {
         userInfo.chatRooms.delete(roomName);
+        userInfo.lastActivity = Date.now();
       }
-
-      // Update chat room participants
-      const chatParticipants = this.chatRooms.get(chatId);
-      if (chatParticipants) {
-        chatParticipants.delete(client.id);
-        if (chatParticipants.size === 0) {
-          this.chatRooms.delete(chatId);
-        }
-      }
-
-      // Notify other participants
-      client.to(roomName).emit('user_left_chat', {
-        chatId,
-        userId: client.userId.toString(),
-        username: client.username,
-      });
 
       this.logger.log(`User ${client.username} left chat ${chatId}`);
 
@@ -360,70 +362,100 @@ export class MessangerGateway implements OnGatewayInit, OnGatewayConnection, OnG
   }
 
   // ===============================================
-  // TYPING INDICATORS
+  // TYPING INDICATORS (OPTIMIZED)
   // ===============================================
-
   @SubscribeMessage('typing_start')
   @UseGuards(WsJwtGuard)
-  @UsePipes(new ValidationPipe())
   async handleTypingStart(
     @ConnectedSocket() client: AuthenticatedSocket,
     @MessageBody() data: TypingIndicatorDto,
   ) {
-    const { chatId } = data;
-    const roomName = `chat_${chatId}`;
+    // Check rate limit
+    if (!this.rateLimiter.checkLimit(client.userId.toString(), 'typing')) {
+      return; // Silently ignore if rate limited
+    }
 
-    // Broadcast typing indicator to other chat participants
-    client.to(roomName).emit('user_typing', {
+    const { chatId } = data;
+    const userIdStr = client.userId.toString();
+
+    // Add to typing users set
+    if (!this.connectionPool.typingUsers.has(chatId)) {
+      this.connectionPool.typingUsers.set(chatId, new Set());
+    }
+    this.connectionPool.typingUsers.get(chatId)!.add(userIdStr);
+
+    // Broadcast typing indicator
+    this.broadcastToChatRoom(chatId, 'user_typing', {
       chatId,
-      userId: client.userId.toString(),
+      userId: userIdStr,
       username: client.username,
       isTyping: true,
-    });
+    }); // Auto-cleanup typing after configured timeout
+    setTimeout(() => {
+      const typingSet = this.connectionPool.typingUsers.get(chatId);
+      if (typingSet) {
+        typingSet.delete(userIdStr);
+        if (typingSet.size === 0) {
+          this.connectionPool.typingUsers.delete(chatId);
+        }
+      }
+    }, WEBSOCKET_CONFIG.TYPING_INDICATOR_TIMEOUT);
   }
 
   @SubscribeMessage('typing_stop')
   @UseGuards(WsJwtGuard)
-  @UsePipes(new ValidationPipe())
   async handleTypingStop(
     @ConnectedSocket() client: AuthenticatedSocket,
     @MessageBody() data: TypingIndicatorDto,
   ) {
     const { chatId } = data;
-    const roomName = `chat_${chatId}`;
+    const userIdStr = client.userId.toString();
 
-    // Broadcast stop typing to other chat participants
-    client.to(roomName).emit('user_typing', {
+    // Remove from typing users
+    const typingSet = this.connectionPool.typingUsers.get(chatId);
+    if (typingSet) {
+      typingSet.delete(userIdStr);
+      if (typingSet.size === 0) {
+        this.connectionPool.typingUsers.delete(chatId);
+      }
+    }
+
+    // Broadcast stop typing
+    this.broadcastToChatRoom(chatId, 'user_typing', {
       chatId,
-      userId: client.userId.toString(),
+      userId: userIdStr,
       username: client.username,
       isTyping: false,
     });
   }
 
   // ===============================================
-  // MESSAGE REACTIONS
+  // MESSAGE REACTIONS (OPTIMIZED)
   // ===============================================
-
   @SubscribeMessage('add_reaction')
   @UseGuards(WsJwtGuard)
-  @UsePipes(new ValidationPipe())
+  @UsePipes(new ValidationPipe({ transform: true }))
   async handleAddReaction(
     @ConnectedSocket() client: AuthenticatedSocket,
     @MessageBody() data: MessageReactionDto,
   ) {
     try {
-      const { messageId, emoji } = data; // Add reaction through service
+      // Check rate limit
+      if (!this.rateLimiter.checkLimit(client.userId.toString(), 'reaction')) {
+        throw new Error('Reaction rate limit exceeded');
+      }
+
+      const { messageId, emoji } = data;
       const result = await this.messengerService.addReaction(
         BigInt(messageId),
         client.userId,
         emoji,
       );
 
-      const message = await this.getMessageWithChatId(BigInt(messageId));
+      const message = await this.messengerService.getMessageById(BigInt(messageId));
 
       // Broadcast reaction to chat participants
-      await this.broadcastToChatRoom(message.chatId.toString(), 'reaction_added', {
+      this.broadcastToChatRoom(message.chatId.toString(), 'reaction_added', {
         messageId,
         emoji,
         userId: client.userId.toString(),
@@ -439,7 +471,7 @@ export class MessangerGateway implements OnGatewayInit, OnGatewayConnection, OnG
 
   @SubscribeMessage('remove_reaction')
   @UseGuards(WsJwtGuard)
-  @UsePipes(new ValidationPipe())
+  @UsePipes(new ValidationPipe({ transform: true }))
   async handleRemoveReaction(
     @ConnectedSocket() client: AuthenticatedSocket,
     @MessageBody() data: MessageReactionDto,
@@ -453,9 +485,9 @@ export class MessangerGateway implements OnGatewayInit, OnGatewayConnection, OnG
       );
 
       if (result) {
-        const message = await this.getMessageWithChatId(BigInt(messageId));
+        const message = await this.messengerService.getMessageById(BigInt(messageId));
 
-        await this.broadcastToChatRoom(message.chatId.toString(), 'reaction_removed', {
+        this.broadcastToChatRoom(message.chatId.toString(), 'reaction_removed', {
           messageId,
           emoji,
           userId: client.userId.toString(),
@@ -470,198 +502,7 @@ export class MessangerGateway implements OnGatewayInit, OnGatewayConnection, OnG
   }
 
   // ===============================================
-  // СТИКЕРЫ И МЕДИА
-  // ===============================================
-
-  @SubscribeMessage('send_sticker')
-  @UseGuards(WsJwtGuard)
-  @UsePipes(new ValidationPipe())
-  async handleSendSticker(
-    @ConnectedSocket() client: AuthenticatedSocket,
-    @MessageBody() data: SendStickerDto,
-  ) {
-    try {
-      const { chatId, stickerId, replyToId, threadId } = data;
-
-      // Verify user has access to chat
-      await this.verifyUserChatAccess(client.userId, BigInt(chatId));
-
-      // Send sticker through service
-      const result = await this.messengerService.sendSticker(
-        BigInt(chatId),
-        client.userId,
-        BigInt(stickerId),
-        {
-          replyToId: replyToId ? BigInt(replyToId) : undefined,
-          threadId: threadId ? BigInt(threadId) : undefined,
-        },
-      );
-
-      // Broadcast sticker to all chat participants
-      await this.broadcastToChatRoom(chatId, 'new_message', {
-        ...result,
-        chatId: chatId,
-        messageType: 'STICKER',
-      });
-
-      // Send delivery confirmation to sender
-      client.emit('message_sent', {
-        tempId: data.tempId,
-        messageId: result.id,
-        timestamp: result.createdAt,
-      });
-
-      // Update chat's last message timestamp
-      await this.updateChatLastActivity(BigInt(chatId));
-
-      return { success: true, data: result };
-    } catch (error) {
-      this.logger.error('Error sending sticker:', error);
-      client.emit('message_error', {
-        tempId: data.tempId,
-        error: error.message,
-      });
-      throw new WsException(error.message);
-    }
-  }
-
-  @SubscribeMessage('send_gif')
-  @UseGuards(WsJwtGuard)
-  @UsePipes(new ValidationPipe())
-  async handleSendGif(
-    @ConnectedSocket() client: AuthenticatedSocket,
-    @MessageBody() data: SendGifDto,
-  ) {
-    try {
-      const { chatId, gifId, replyToId, threadId } = data;
-
-      // Verify user has access to chat
-      await this.verifyUserChatAccess(client.userId, BigInt(chatId));
-
-      // Send GIF through service
-      const result = await this.messengerService.sendGif(
-        BigInt(chatId),
-        client.userId,
-        BigInt(gifId),
-        {
-          replyToId: replyToId ? BigInt(replyToId) : undefined,
-          threadId: threadId ? BigInt(threadId) : undefined,
-        },
-      );
-
-      // Broadcast GIF to all chat participants
-      await this.broadcastToChatRoom(chatId, 'new_message', {
-        ...result,
-        chatId: chatId,
-        messageType: 'GIF',
-      });
-
-      // Send delivery confirmation to sender
-      client.emit('message_sent', {
-        tempId: data.tempId,
-        messageId: result.id,
-        timestamp: result.createdAt,
-      });
-
-      // Update chat's last message timestamp
-      await this.updateChatLastActivity(BigInt(chatId));
-
-      return { success: true, data: result };
-    } catch (error) {
-      this.logger.error('Error sending GIF:', error);
-      client.emit('message_error', {
-        tempId: data.tempId,
-        error: error.message,
-      });
-      throw new WsException(error.message);
-    }
-  }
-
-  @SubscribeMessage('send_custom_emoji')
-  @UseGuards(WsJwtGuard)
-  @UsePipes(new ValidationPipe())
-  async handleSendCustomEmoji(
-    @ConnectedSocket() client: AuthenticatedSocket,
-    @MessageBody() data: SendCustomEmojiDto,
-  ) {
-    try {
-      const { chatId, customEmojiId, replyToId, threadId } = data;
-
-      // Verify user has access to chat
-      await this.verifyUserChatAccess(client.userId, BigInt(chatId));
-
-      // Send custom emoji through service
-      const result = await this.messengerService.sendCustomEmoji(
-        BigInt(chatId),
-        client.userId,
-        BigInt(customEmojiId),
-        {
-          replyToId: replyToId ? BigInt(replyToId) : undefined,
-          threadId: threadId ? BigInt(threadId) : undefined,
-        },
-      );
-
-      // Broadcast custom emoji to all chat participants
-      await this.broadcastToChatRoom(chatId, 'new_message', {
-        ...result,
-        chatId: chatId,
-        messageType: 'CUSTOM_EMOJI',
-      });
-
-      // Send delivery confirmation to sender
-      client.emit('message_sent', {
-        tempId: data.tempId,
-        messageId: result.id,
-        timestamp: result.createdAt,
-      });
-
-      // Update chat's last message timestamp
-      await this.updateChatLastActivity(BigInt(chatId));
-
-      return { success: true, data: result };
-    } catch (error) {
-      this.logger.error('Error sending custom emoji:', error);
-      client.emit('message_error', {
-        tempId: data.tempId,
-        error: error.message,
-      });
-      throw new WsException(error.message);
-    }
-  }
-
-  // ===============================================
-  // ONLINE STATUS
-  // ===============================================
-
-  @SubscribeMessage('update_online_status')
-  @UseGuards(WsJwtGuard)
-  @UsePipes(new ValidationPipe())
-  async handleUpdateOnlineStatus(
-    @ConnectedSocket() client: AuthenticatedSocket,
-    @MessageBody() data: OnlineStatusDto,
-  ) {
-    try {
-      const { isOnline } = data;
-
-      // Update user's online status
-      const userInfo = this.connectedUsers.get(client.id);
-      if (userInfo) {
-        userInfo.isOnline = isOnline;
-        userInfo.lastSeen = new Date();
-      }
-
-      // Broadcast status to contacts
-      await this.broadcastUserOnlineStatus(client.userId, isOnline);
-
-      return { success: true, isOnline };
-    } catch (error) {
-      this.logger.error('Error updating online status:', error);
-      throw new WsException(error.message);
-    }
-  }
-
-  // ===============================================
-  // HELPER METHODS
+  // HELPER METHODS (OPTIMIZED)
   // ===============================================
 
   private extractTokenFromHandshake(client: Socket): string | null {
@@ -670,7 +511,6 @@ export class MessangerGateway implements OnGatewayInit, OnGatewayConnection, OnG
       return authHeader.substring(7);
     }
 
-    // Alternative: check query params
     const token = client.handshake.query.token;
     return typeof token === 'string' ? token : null;
   }
@@ -685,66 +525,64 @@ export class MessangerGateway implements OnGatewayInit, OnGatewayConnection, OnG
     }
   }
 
-  private async registerUserConnection(client: AuthenticatedSocket) {
+  private registerUserConnection(client: AuthenticatedSocket) {
     const userIdStr = client.userId.toString();
+    const now = Date.now();
 
     // Register socket
-    this.connectedUsers.set(client.id, {
+    this.connectionPool.connectedUsers.set(client.id, {
       userId: client.userId,
       username: client.username,
       socketId: client.id,
-      lastSeen: new Date(),
-      isOnline: true,
+      lastActivity: now,
       chatRooms: new Set(),
     });
 
     // Track user sockets
-    if (!this.userSockets.has(userIdStr)) {
-      this.userSockets.set(userIdStr, new Set());
+    if (!this.connectionPool.userSockets.has(userIdStr)) {
+      this.connectionPool.userSockets.set(userIdStr, new Set());
     }
-    this.userSockets.get(userIdStr)!.add(client.id);
-
-    // Auto-join user to their active chats
-    await this.autoJoinUserChats(client);
+    this.connectionPool.userSockets.get(userIdStr)!.add(client.id);
   }
 
-  private async unregisterUserConnection(client: AuthenticatedSocket) {
+  private unregisterUserConnection(client: AuthenticatedSocket) {
     const userIdStr = client.userId.toString();
 
     // Remove from connected users
-    this.connectedUsers.delete(client.id);
+    this.connectionPool.connectedUsers.delete(client.id);
 
     // Remove from user sockets
-    const userSocketIds = this.userSockets.get(userIdStr);
+    const userSocketIds = this.connectionPool.userSockets.get(userIdStr);
     if (userSocketIds) {
       userSocketIds.delete(client.id);
       if (userSocketIds.size === 0) {
-        this.userSockets.delete(userIdStr);
+        this.connectionPool.userSockets.delete(userIdStr);
       }
     }
 
-    // Remove from chat rooms
-    for (const [chatId, participants] of this.chatRooms.entries()) {
-      participants.delete(client.id);
-      if (participants.size === 0) {
-        this.chatRooms.delete(chatId);
+    // Clean up typing indicators
+    for (const [chatId, typingSet] of this.connectionPool.typingUsers.entries()) {
+      typingSet.delete(userIdStr);
+      if (typingSet.size === 0) {
+        this.connectionPool.typingUsers.delete(chatId);
       }
     }
   }
 
   private async autoJoinUserChats(client: AuthenticatedSocket) {
     try {
-      // Get user's active chats
+      // Get user's active chats (limit to prevent overload)
       const userChats = await this.messengerService.getUserChats(client.userId, {
-        limit: 100,
+        limit: WEBSOCKET_CONFIG.MAX_AUTO_JOIN_CHATS,
         offset: 0,
-      }); // Join socket to chat rooms
-      for (const chat of userChats) {
-        const roomName = `chat_${chat.id}`;
-        await client.join(roomName);
+      });
 
-        const userInfo = this.connectedUsers.get(client.id);
-        if (userInfo) {
+      // Join socket to chat rooms efficiently
+      const userInfo = this.connectionPool.connectedUsers.get(client.id);
+      if (userInfo) {
+        for (const chat of userChats) {
+          const roomName = `chat_${chat.id}`;
+          await client.join(roomName);
           userInfo.chatRooms.add(roomName);
         }
       }
@@ -753,127 +591,20 @@ export class MessangerGateway implements OnGatewayInit, OnGatewayConnection, OnG
     }
   }
 
-  private async verifyUserChatAccess(userId: bigint, chatId: bigint) {
-    const hasAccess = await this.prisma.chatParticipant.findFirst({
-      where: {
-        chatId,
-        userId,
-        // flags: 0, // Not banned/removed
-      },
-    });
-
-    if (!hasAccess) {
-      throw new Error('No access to this chat');
-    }
-  }
-
-  private async broadcastToChatRoom(chatId: string, event: string, data: any) {
+  private broadcastToChatRoom(chatId: string, event: string, data: any) {
     const roomName = `chat_${chatId}`;
     this.server.to(roomName).emit(event, data);
   }
-
-  private async broadcastUserOnlineStatus(userId: bigint, isOnline: boolean) {
-    // Get user's contacts/chat participants
-    const contacts = await this.getUserContacts(userId);
-
-    for (const contactId of contacts) {
-      const contactSocketIds = this.userSockets.get(contactId.toString());
-      if (contactSocketIds) {
-        for (const socketId of contactSocketIds) {
-          this.server.to(socketId).emit('contact_status_changed', {
-            userId: userId.toString(),
-            isOnline,
-            lastSeen: new Date(),
-          });
-        }
-      }
-    }
-  }
-
-  private async getUserContacts(userId: bigint): Promise<bigint[]> {
-    // Get all users from chats where this user participates
-    const contacts = await this.prisma.chatParticipant.findMany({
-      where: {
-        chat: {
-          participants: {
-            some: { userId },
-          },
-        },
-        userId: { not: userId },
-      },
-      select: { userId: true },
-      distinct: ['userId'],
-    });
-
-    return contacts.map(c => c.userId);
-  }
-
-  private async getMessageWithChatId(messageId: bigint) {
-    const message = await this.prisma.message.findUnique({
-      where: { id: messageId },
-      select: { id: true, chatId: true },
-    });
-
-    if (!message) {
-      throw new Error('Message not found');
-    }
-
-    return message;
-  }
-  private async markMessagesAsRead(chatId: bigint, userId: bigint) {
-    try {
-      // Get the latest message in the chat
-      const latestMessage = await this.prisma.message.findFirst({
-        where: {
-          chatId,
-          deletedAt: null,
-        },
-        orderBy: { createdAt: 'desc' },
-        select: { id: true },
-      });
-
-      if (latestMessage) {
-        // Use the MessangerService method to properly mark messages as read
-        await this.messengerService.markMessagesAsRead(chatId, userId, latestMessage.id);
-      }
-    } catch (error) {
-      this.logger.error('Error marking messages as read:', error);
-    }
-  }
-
-  private async updateChatLastActivity(chatId: bigint) {
-    try {
-      await this.prisma.chat.update({
-        where: { id: chatId },
-        data: { lastMessageAt: new Date() },
-      });
-    } catch (error) {
-      this.logger.error('Error updating chat last activity:', error);
-    }
-  }
-
-  private async updateUserLastSeen(userId: bigint) {
-    try {
-      await this.prisma.user.update({
-        where: { id: userId },
-        data: { lastSeen: new Date() },
-      });
-    } catch (error) {
-      this.logger.error('Error updating user last seen:', error);
-    }
-  }
-
   private cleanupStaleConnections() {
-    const now = new Date();
-    const staleThreshold = 5 * 60 * 1000; // 5 minutes
+    const now = Date.now();
+    const staleThreshold = WEBSOCKET_CONFIG.STALE_CONNECTION_THRESHOLD;
 
-    for (const [socketId, userInfo] of this.connectedUsers.entries()) {
-      const timeSinceLastSeen = now.getTime() - userInfo.lastSeen.getTime();
+    for (const [socketId, userInfo] of this.connectionPool.connectedUsers.entries()) {
+      const timeSinceLastActivity = now - userInfo.lastActivity;
 
-      if (timeSinceLastSeen > staleThreshold) {
+      if (timeSinceLastActivity > staleThreshold) {
         this.logger.warn(`Cleaning up stale connection for user ${userInfo.username}`);
 
-        // Force disconnect
         const socket = this.server.sockets.sockets.get(socketId);
         if (socket) {
           socket.disconnect(true);
@@ -882,15 +613,22 @@ export class MessangerGateway implements OnGatewayInit, OnGatewayConnection, OnG
     }
   }
 
-  private broadcastOnlineUsers() {
-    const onlineUsers = Array.from(this.connectedUsers.values())
-      .filter(user => user.isOnline)
-      .map(user => ({
-        userId: user.userId.toString(),
-        username: user.username,
-        lastSeen: user.lastSeen,
-      }));
+  private cleanupTypingIndicators() {
+    // Clean up empty typing indicator sets
+    for (const [chatId, typingSet] of this.connectionPool.typingUsers.entries()) {
+      if (typingSet.size === 0) {
+        this.connectionPool.typingUsers.delete(chatId);
+      }
+    }
+  }
 
-    this.server.emit('online_users_update', { onlineUsers });
+  // Cleanup on shutdown
+  onModuleDestroy() {
+    if (this.cleanupInterval) {
+      clearInterval(this.cleanupInterval);
+    }
+    if (this.typingCleanupInterval) {
+      clearInterval(this.typingCleanupInterval);
+    }
   }
 }

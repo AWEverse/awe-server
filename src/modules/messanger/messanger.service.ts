@@ -1074,22 +1074,46 @@ export class MessangerService {
     };
   }
 
-  async markMessagesAsRead(chatId: bigint, userId: bigint, upToMessageId: bigint): Promise<number> {
-    const result = await this.prisma.messageRead.createMany({
-      data: [
-        {
-          messageId: upToMessageId,
-          userId: userId,
-          readAt: new Date(),
+  async markMessagesAsRead(chatId: bigint, userId: bigint, upToMessageId: bigint): Promise<number>;
+  async markMessagesAsRead(chatId: bigint, userId: bigint): Promise<number>;
+  async markMessagesAsRead(
+    chatId: bigint,
+    userId: bigint,
+    upToMessageId?: bigint,
+  ): Promise<number> {
+    if (upToMessageId) {
+      // Original implementation
+      const result = await this.prisma.messageRead.createMany({
+        data: [
+          {
+            messageId: upToMessageId,
+            userId: userId,
+            readAt: new Date(),
+          },
+        ],
+        skipDuplicates: true,
+      });
+      await this.prisma.messageRead.update({
+        where: { messageId_userId: { messageId: upToMessageId, userId } },
+        data: { readAt: new Date() },
+      });
+      return result.count;
+    } else {
+      // Mark all unread messages in chat as read
+      const latestMessage = await this.prisma.message.findFirst({
+        where: {
+          chatId,
+          deletedAt: null,
         },
-      ],
-      skipDuplicates: true,
-    });
-    await this.prisma.messageRead.update({
-      where: { messageId_userId: { messageId: upToMessageId, userId } },
-      data: { readAt: new Date() },
-    });
-    return result.count;
+        orderBy: { createdAt: 'desc' },
+        select: { id: true },
+      });
+
+      if (latestMessage) {
+        return this.markMessagesAsRead(chatId, userId, latestMessage.id);
+      }
+      return 0;
+    }
   }
 
   async searchInAllChats(
@@ -1448,6 +1472,28 @@ export class MessangerService {
 
   async getUserChatStatistics(userId: bigint): Promise<UserChatStatistics> {
     return this.getUserStatistics(userId, userId);
+  }
+
+  async getMessageById(messageId: bigint) {
+    const message = await this.prisma.message.findUnique({
+      where: { id: messageId },
+      select: {
+        id: true,
+        chatId: true,
+        content: true,
+        messageType: true,
+        createdAt: true,
+        editedAt: true,
+        deletedAt: true,
+        flags: true,
+      },
+    });
+
+    if (!message) {
+      throw new NotFoundException('Message not found');
+    }
+
+    return message;
   }
 
   async getMessageReactions(messageId: bigint): Promise<MessageReaction[]> {

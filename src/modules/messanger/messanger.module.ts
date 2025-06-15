@@ -10,6 +10,8 @@ import { MessangerController } from './messanger.controller';
 
 // Real-time functionality
 import { MessangerGateway } from './realtime/messanger.gateway';
+import { WebSocketRateLimiter } from './realtime/websocket-rate-limiter.service';
+import { WebSocketMonitor } from './realtime/websocket-monitor.service';
 
 // Optimizations
 import { DatabaseOptimizer } from './optimizations/database-optimization';
@@ -61,6 +63,8 @@ import { OptimizedDatabasePool } from '../common/database/optimized-pool.service
 
     // Real-time
     MessangerGateway,
+    WebSocketRateLimiter,
+    WebSocketMonitor,
 
     // Optimizations
     DatabaseOptimizer,
