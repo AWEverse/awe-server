@@ -2,9 +2,9 @@ import { Module, Logger } from '@nestjs/common';
 import { PassportModule } from '@nestjs/passport';
 import { JwtModule } from '@nestjs/jwt';
 import { ConfigModule, ConfigService } from '@nestjs/config';
-import { ScheduleModule } from '@nestjs/schedule';
 import { AuthService } from './auth.service';
 import { AuthController } from './auth.controller';
+import { TokenCleanupService } from './services/token-cleanup.service';
 import { SupabaseModule } from '../../libs/supabase/supabase.module';
 import { ExtractJwt } from 'passport-jwt';
 import { SupabaseAuthStrategy } from './strategies/supabase.strategy';
@@ -21,7 +21,6 @@ import { AdminGuard } from './guards/admin.guard';
   imports: [
     ConfigModule,
     SupabaseModule,
-    ScheduleModule.forRoot(),
     PassportModule.register({
       defaultStrategy: 'jwt',
       session: false,
@@ -51,6 +50,7 @@ import { AdminGuard } from './guards/admin.guard';
   controllers: [AuthController],
   providers: [
     AuthService,
+    TokenCleanupService,
     Logger,
     JwtStrategy,
     JwtAuthGuard,

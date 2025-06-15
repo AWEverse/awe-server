@@ -9,6 +9,9 @@ import { SwaggerConfig } from './modules/common/swagger';
 const compression = require('compression');
 const helmet = require('helmet');
 
+import * as crypto from 'crypto';
+(globalThis as any).crypto = crypto;
+
 (async () => {
   const logger = new Logger('Bootstrap');
 
