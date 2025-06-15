@@ -1611,7 +1611,7 @@ model RefreshToken {
   isRevoked Boolean  @default(false)
   isUsed    Boolean  @default(false) // For reuse detection (Signal/Stripe pattern)
 
-  session Session @relation(fields: [sessionId], references: [id])
+  session Session @relation(fields: [sessionId], references: [id], onDelete: Cascade)
   user    User    @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@index([userId])

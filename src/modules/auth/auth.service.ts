@@ -1316,18 +1316,19 @@ export class AuthService {
 
   /**
    * Ensures that only one active session exists per device for security and resource management.
-   * When a user logs in from the same device, all previous sessions for that device are deactivated
-   * and their refresh tokens are revoked.
+   * When a user logs in from the same device, all previous sessions for that device are completely
+   * removed along with their refresh tokens.
    *
    * This prevents:
    * - Session hijacking from the same device
    * - Resource leaks from multiple sessions
    * - Token confusion and security vulnerabilities
+   * - Unique constraint conflicts on sessionId
    *
    * @param userId - The user ID
    * @param deviceId - The device ID (internal database ID, not deviceToken)
    * @param transaction - Optional Prisma transaction
-   * @returns Object with count of deactivated sessions and revoked tokens
+   * @returns Object with count of deleted sessions and revoked tokens
    */
   private async deactivateOldDeviceSessions(
     userId: bigint,
@@ -1336,37 +1337,42 @@ export class AuthService {
   ): Promise<{ deactivatedSessions: number; revokedTokens: number }> {
     const tx = transaction || this.prisma;
 
-    // Деактивировать все существующие сессии для этого устройства
-    const sessionsResult = await tx.session.updateMany({
+    // Найти все активные сессии для этого устройства
+    const oldSessions = await tx.session.findMany({
       where: {
         userId: userId,
         deviceId: deviceId,
         flags: 1, // Только активные сессии
       },
-      data: { flags: 0 }, // Деактивировать
+      select: { id: true },
     });
 
-    // Отозвать все существующие refresh токены для этого устройства
+    if (oldSessions.length === 0) {
+      return { deactivatedSessions: 0, revokedTokens: 0 };
+    }
+
+    const sessionIds = oldSessions.map(s => s.id);
+
+    // Сначала отозвать все refresh токены для этих сессий
     const tokensResult = await tx.refreshToken.updateMany({
       where: {
-        userId: userId,
-        sessionId: {
-          in: await tx.session
-            .findMany({
-              where: { userId: userId, deviceId: deviceId },
-              select: { id: true },
-            })
-            .then(sessions => sessions.map(s => s.id)),
-        },
+        sessionId: { in: sessionIds },
         isRevoked: false,
       },
       data: { isRevoked: true },
     });
 
+    // Затем удалить сессии полностью (каскадное удаление удалит связанные RefreshToken)
+    const sessionsResult = await tx.session.deleteMany({
+      where: {
+        id: { in: sessionIds },
+      },
+    });
+
     if (sessionsResult.count > 0 || tokensResult.count > 0) {
       this.logger.log(
         `Device session cleanup for user ${userId}, device ${deviceId}: ` +
-          `${sessionsResult.count} sessions deactivated, ${tokensResult.count} tokens revoked`,
+          `${sessionsResult.count} sessions deleted, ${tokensResult.count} tokens revoked`,
       );
     }
 

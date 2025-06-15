@@ -328,8 +328,8 @@ model Device {
 
 model Session {
   id           BigInt    @id @default(autoincrement())
-  userId       BigInt    @unique
-  deviceId     BigInt    @unique
+  userId       BigInt // ✅ Убрали @unique - пользователь может иметь много сессий
+  deviceId     BigInt    @unique // ✅ Оставили @unique - одна сессия на устройство
   ratchetState Bytes
   sessionKey   String?   @db.VarChar(256)
   expiresAt    DateTime? @db.Timestamptz(3)
@@ -341,6 +341,7 @@ model Session {
   device       Device         @relation(fields: [deviceId], references: [id], onDelete: Cascade)
   RefreshToken RefreshToken[]
 
+  @@unique([userId, deviceId]) // ✅ ПРАВИЛЬНО: одна сессия на комбинацию пользователь+устройство
   @@index([userId])
   @@index([deviceId])
   @@index([userId, flags])
@@ -1597,20 +1598,20 @@ model Report {
 
 model RefreshToken {
   id        BigInt   @id @default(autoincrement())
-  sessionId BigInt
-  userId    BigInt   @unique
+  sessionId BigInt   @unique // ✅ ИСПРАВЛЕНО: одна активная токен на сессию
+  userId    BigInt // ✅ Убрали @unique - пользователь может иметь токены с разных устройств
   token     String   @unique @db.VarChar(255)
   tokenHash String   @unique @db.VarChar(255) // Хеш токена для безопасности
   expiresAt DateTime @db.Timestamptz(3)
   createdAt DateTime @default(now()) @db.Timestamptz(3)
   updatedAt DateTime @updatedAt @db.Timestamptz(3)
-  deviceId  String?  @unique
+  deviceId  String?  @unique // ✅ Правильно: одна активная токен на устройство
   ipAddress String?  @db.Inet
   userAgent String?  @db.VarChar(512)
   isRevoked Boolean  @default(false)
   isUsed    Boolean  @default(false) // For reuse detection (Signal/Stripe pattern)
 
-  session Session @relation(fields: [sessionId], references: [id])
+  session Session @relation(fields: [sessionId], references: [id], onDelete: Cascade)
   user    User    @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@index([userId])
