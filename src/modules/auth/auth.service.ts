@@ -7,10 +7,8 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
-import { JwtService } from '@nestjs/jwt';
 import * as argon2 from 'argon2';
 import { blake3 } from '@noble/hashes/blake3';
-import { v4 as uuidv4 } from 'uuid';
 import { SupabaseAuthService } from '../../libs/supabase/auth/supabase-auth.service';
 import { PrismaService } from '../../libs/db/prisma.service';
 import { AUTH_CONSTANTS } from './constants/auth.constants';
@@ -34,7 +32,6 @@ export class AuthService {
     private readonly supabaseAuth: SupabaseAuthService,
     private readonly prisma: PrismaService,
     private readonly configService: ConfigService,
-    private readonly jwtService: JwtService,
   ) {
     // Initialize configurable token lifetimes
     this.tokenLifetimes = {
@@ -184,15 +181,26 @@ export class AuthService {
         // Register user with Supabase for JWT token generation
         try {
           const supabaseResult = await this.supabaseAuth.signUp(newUser.email, password);
+
           if (supabaseResult?.session?.access_token) {
             // Use Supabase's access token
             const accessToken = supabaseResult.session.access_token;
             const refreshToken = supabaseResult.session.refresh_token;
+            const supabaseId = supabaseResult.session.user.id;
 
             // SECURITY: Ensure only one session per device
             // Store Supabase refresh token in our database for tracking
             if (refreshToken && device && session) {
               try {
+                await tx.user.update({
+                  where: {
+                    id: newUser.id,
+                  },
+                  data: {
+                    supabaseId,
+                  },
+                });
+
                 // Сначала удалить все существующие refresh токены для этого устройства (by deviceId)
                 await tx.refreshToken.deleteMany({
                   where: {
@@ -243,35 +251,12 @@ export class AuthService {
             };
           }
         } catch (supabaseError) {
-          this.logger.warn(
-            `Supabase registration failed, using local JWT: ${supabaseError.message}`,
-          );
+          this.logger.error(`Supabase registration failed: ${supabaseError.message}`);
+          throw new BadRequestException('Registration failed');
         }
 
-        // Fallback to local JWT generation if Supabase fails
-        const deviceRisk = device ? await this.assessDeviceRisk(device, userAgent) : 'high';
-        const payload = this.createJWTPayload(newUser, deviceRisk);
-        const finalLifetimes = this.getTokenLifetimesForRisk(deviceRisk);
-
-        const accessToken = this.jwtService.sign(payload, {
-          expiresIn: Math.floor(finalLifetimes.accessTokenMs / 1000), // Convert to seconds
-        });
-
-        return {
-          user: {
-            id: newUser.id.toString(),
-            email: newUser.email,
-            username: newUser.username,
-            fullName: newUser.fullName || undefined,
-            emailVerified: true, // Since we're not using email verification in this flow
-          },
-          accessToken,
-          refreshToken: refreshToken, // Return the original token, not the hash
-          expiresAt: Date.now() + finalLifetimes.accessTokenMs,
-          tokenType: 'Bearer',
-          message: 'Registration successful',
-          requiresEmailVerification: false,
-        };
+        // If we reach here, Supabase registration failed
+        throw new BadRequestException('Registration service unavailable');
       } catch (error) {
         this.logger.error(`Registration failed for ${email}:`, error.message);
         throw error;
@@ -498,34 +483,12 @@ export class AuthService {
             };
           }
         } catch (supabaseError) {
-          this.logger.warn(`Supabase login failed, using local JWT: ${supabaseError.message}`);
+          this.logger.error(`Supabase login failed: ${supabaseError.message}`);
+          throw new UnauthorizedException('Authentication failed');
         }
 
-        // Fallback to local JWT generation if Supabase fails
-        const deviceRisk = device ? await this.assessDeviceRisk(device, userAgent) : 'high';
-        const payload = this.createJWTPayload(dbUser, deviceRisk);
-        const finalLifetimes = this.getTokenLifetimesForRisk(deviceRisk);
-
-        const accessToken = this.jwtService.sign(payload, {
-          expiresIn: `${finalLifetimes.accessTokenMs}ms`,
-        });
-
-        return {
-          user: {
-            id: dbUser.id.toString(),
-            email: dbUser.email,
-            username: dbUser.username,
-            fullName: dbUser.fullName || undefined,
-            role: dbUser.role,
-            emailVerified: true,
-            createdAt: dbUser.createdAt,
-            updatedAt: dbUser.updatedAt,
-          },
-          accessToken,
-          refreshToken: refreshTokenRecord?.token,
-          expiresAt: Date.now() + finalLifetimes.accessTokenMs,
-          tokenType: 'Bearer',
-        };
+        // If we reach here, Supabase authentication failed
+        throw new UnauthorizedException('Authentication service unavailable');
       } catch (error) {
         this.logger.error(`Login failed for ${email}:`, error.message);
         throw error;
@@ -575,38 +538,38 @@ export class AuthService {
           data: { isUsed: true },
         });
 
+        // Refresh token with Supabase
+        const supabaseResult = await this.supabaseAuth.refreshSession(refreshToken);
+        if (!supabaseResult?.session?.access_token) {
+          throw new UnauthorizedException('Failed to refresh token with Supabase');
+        }
+
+        const finalAccessToken = supabaseResult.session.access_token;
+        const finalRefreshToken = supabaseResult.session.refresh_token || refreshToken;
+        const finalExpiresAt = supabaseResult.session.expires_at
+          ? supabaseResult.session.expires_at * 1000
+          : Date.now() + this.tokenLifetimes.accessTokenMs;
+
         // Delete the old token to avoid unique constraint conflicts
         await tx.refreshToken.delete({
           where: { id: tokenRecord.id },
         });
 
-        // Generate new refresh token
-        const newRefreshToken = this.generateSecureToken(64);
-        const newTokenHash = Buffer.from(blake3(newRefreshToken)).toString('hex');
-        const expiresAt = new Date(Date.now() + this.tokenLifetimes.refreshTokenMs);
+        // Create new refresh token record with Supabase token
+        const newTokenHash = Buffer.from(blake3(finalRefreshToken)).toString('hex');
+        const tokenExpiresAt = new Date(Date.now() + this.tokenLifetimes.refreshTokenMs);
 
-        // Create new refresh token record
         const newTokenRecord = await tx.refreshToken.create({
           data: {
             userId: tokenRecord.userId,
             sessionId: tokenRecord.sessionId,
-            token: newRefreshToken, // TODO: Remove after migration - store only hash
+            token: finalRefreshToken, // Store Supabase refresh token
             tokenHash: newTokenHash,
-            expiresAt,
+            expiresAt: tokenExpiresAt,
             deviceId: tokenRecord.deviceId,
             isRevoked: false,
             isUsed: false,
           },
-        });
-
-        // Generate new access token with device risk assessment
-        const device = tokenRecord.session?.device;
-        const deviceRisk = device ? await this.assessDeviceRisk(device, userAgent) : 'high';
-        const payload = this.createJWTPayload(tokenRecord.user, deviceRisk);
-        const finalLifetimes = this.getTokenLifetimesForRisk(deviceRisk);
-
-        const accessToken = this.jwtService.sign(payload, {
-          expiresIn: `${finalLifetimes.accessTokenMs}ms`,
         });
 
         this.logger.log(`Token refreshed successfully for user: ${tokenRecord.user.id}`);
@@ -622,9 +585,9 @@ export class AuthService {
             createdAt: tokenRecord.user.createdAt,
             updatedAt: tokenRecord.user.updatedAt,
           },
-          accessToken,
-          refreshToken: newRefreshToken, // Return new refresh token
-          expiresAt: Date.now() + finalLifetimes.accessTokenMs,
+          accessToken: finalAccessToken,
+          refreshToken: finalRefreshToken,
+          expiresAt: finalExpiresAt,
           tokenType: 'Bearer',
         };
       } catch (error) {
@@ -1141,79 +1104,6 @@ export class AuthService {
     if (daysSinceLastUse > 7) return 'medium';
 
     return 'low';
-  }
-
-  // SECURITY: Generate device-specific token lifetimes based on risk
-  private getTokenLifetimesForRisk(risk: 'low' | 'medium' | 'high'): TokenLifetimes {
-    const baseLifetimes = this.tokenLifetimes;
-
-    switch (risk) {
-      case 'high':
-        return {
-          accessTokenMs: Math.min(baseLifetimes.accessTokenMs, 5 * 60 * 1000), // Max 5 minutes
-          refreshTokenMs: Math.min(baseLifetimes.refreshTokenMs, 24 * 60 * 60 * 1000), // Max 1 day
-          sessionMs: Math.min(baseLifetimes.sessionMs, 12 * 60 * 60 * 1000), // Max 12 hours
-        };
-      case 'medium':
-        return {
-          accessTokenMs: Math.min(baseLifetimes.accessTokenMs, 10 * 60 * 1000), // Max 10 minutes
-          refreshTokenMs: Math.min(baseLifetimes.refreshTokenMs, 7 * 24 * 60 * 60 * 1000), // Max 7 days
-          sessionMs: Math.min(baseLifetimes.sessionMs, 24 * 60 * 60 * 1000), // Max 24 hours
-        };
-      case 'low':
-      default:
-        return baseLifetimes;
-    }
-  }
-
-  // SECURITY: Create JWT payload with security features
-  private createJWTPayload(user: any, deviceRisk: 'low' | 'medium' | 'high' = 'low'): any {
-    return {
-      sub: user.id.toString(),
-      jti: uuidv4(), // JWT ID for blacklisting and auditing
-      iat: Math.floor(Date.now() / 1000), // Issued at time
-      // Remove exp from payload - let JWT service handle it via expiresIn option
-      email: user.email,
-      username: user.username,
-      role: user.role?.name || 'user',
-      // TODO: Add 'kid' (Key ID) for JWT signature rotation support
-      risk: deviceRisk, // Include risk level for client-side behavior
-    };
-  }
-
-  // SUPABASE INTEGRATION: Determine whether to use Supabase or local JWT
-  private shouldUseSupabaseAuth(): boolean {
-    // Use environment variable to control JWT strategy
-    const useSupabase = this.configService.get<boolean>('USE_SUPABASE_JWT', false);
-    return useSupabase;
-  }
-
-  // SUPABASE INTEGRATION: Create enhanced payload from Supabase user
-  private createEnhancedSupabasePayload(
-    supabaseUser: any,
-    localUser: any,
-    deviceRisk: 'low' | 'medium' | 'high' = 'low',
-  ): any {
-    return {
-      // Supabase standard claims
-      sub: supabaseUser.id,
-      aud: supabaseUser.aud,
-      iat: Math.floor(Date.now() / 1000),
-
-      // Our enhanced security claims
-      jti: uuidv4(),
-      email: localUser.email,
-      username: localUser.username,
-      role: localUser.role?.name || 'user',
-      risk: deviceRisk,
-
-      // Local user reference for database operations
-      local_user_id: localUser.id.toString(),
-
-      // Session security metadata
-      device_validated: true,
-      fingerprint_checked: true,
-    };
   }
 
   // MIGRATION: Method to migrate existing tokens to hash-only storage

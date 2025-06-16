@@ -1,292 +1,160 @@
 # Forum Module
 
-## Overview
+Простой модуль для работы с форумом в приложении AWE Server.
 
-The Forum Module provides comprehensive forum functionality for the AWE platform, including thread management, reply systems, categories, search capabilities, and moderation tools. It supports nested discussions, real-time updates, and advanced content moderation.
+## Описание
 
-## Features
+Модуль предоставляет функциональность для:
+- Создания и управления форумами
+- Создания категорий внутри форумов
+- Создания постов в категориях
+- Создания ответов на посты
+- Работы с тегами для постов
 
-### Thread Management
-- **Thread Creation**: Create discussion threads with rich content
-- **Thread Categories**: Organize threads into categories and subcategories
-- **Thread Pagination**: Efficient pagination for large thread lists
-- **Thread Pinning**: Pin important threads to the top
-- **Thread Locking**: Lock/unlock threads to control participation
+## Структура базы данных
 
-### Reply System
-- **Nested Replies**: Support for threaded conversations
-- **Reply Quoting**: Quote previous messages in replies
-- **Reply Editing**: Edit replies with revision history
-- **Reply Reactions**: Like, dislike, and custom reactions
-- **Reply Notifications**: Real-time notifications for new replies
-
-### Search & Discovery
-- **Full-Text Search**: Advanced search across threads and replies
-- **Category Filtering**: Filter content by categories
-- **Tag-based Search**: Search by custom tags
-- **Trending Topics**: Identify popular and trending discussions
-- **Search Suggestions**: Auto-complete search suggestions
-
-### Moderation Tools
-- **Content Moderation**: Review and moderate forum content
-- **User Moderation**: Temporarily ban or restrict users
-- **Automated Filters**: Auto-detect spam and inappropriate content
-- **Report System**: User reporting system for content
-- **Moderation Queue**: Queue system for reviewing flagged content
-
-### Security & Performance
-- **Rate Limiting**: Prevent spam and abuse
-- **Content Sanitization**: XSS protection for user content
-- **Caching**: Redis caching for frequently accessed content
-- **Indexing**: Full-text search indexing for performance
-- **Permission System**: Role-based access control
+### Модели Prisma
+- `Forum` - основной контейнер для категорий и постов
+- `ForumCategory` - категории внутри форума
+- `ForumPost` - посты в категориях
+- `ForumReply` - ответы на посты
+- `ForumTag` - теги для постов
+- `ForumPostTag` - связующая таблица для постов и тегов
 
 ## API Endpoints
 
-### Threads
+### Форумы
 
-```
-POST   /forum/threads                  - Create new thread
-GET    /forum/threads                  - List threads with pagination
-GET    /forum/threads/:id              - Get thread details
-PUT    /forum/threads/:id              - Update thread
-DELETE /forum/threads/:id              - Delete thread
-POST   /forum/threads/:id/pin          - Pin/unpin thread
-POST   /forum/threads/:id/lock         - Lock/unlock thread
-```
-
-### Replies
-
-```
-POST   /forum/threads/:id/replies      - Add reply to thread
-GET    /forum/threads/:id/replies      - Get thread replies
-PUT    /forum/replies/:id              - Update reply
-DELETE /forum/replies/:id              - Delete reply
-POST   /forum/replies/:id/quote        - Quote reply
-POST   /forum/replies/:id/react        - Add reaction to reply
+#### `POST /forum`
+Создать новый форум
+```json
+{
+  "name": "Название форума",
+  "slug": "forum-slug",
+  "description": "Описание форума (опционально)"
+}
 ```
 
-### Categories
+#### `GET /forum`
+Получить список всех форумов
 
-```
-POST   /forum/categories               - Create category
-GET    /forum/categories               - List categories
-GET    /forum/categories/:id           - Get category details
-PUT    /forum/categories/:id           - Update category
-DELETE /forum/categories/:id           - Delete category
-GET    /forum/categories/:id/threads   - Get threads in category
-```
+#### `GET /forum/:slug`
+Получить форум по slug
 
-### Search
-
-```
-GET    /forum/search                   - Search threads and replies
-GET    /forum/search/suggestions       - Get search suggestions
-GET    /forum/trending                 - Get trending topics
-GET    /forum/tags                     - Get available tags
-GET    /forum/tags/:tag                - Get content by tag
+#### `POST /forum/:forumId/categories`
+Создать категорию в форуме
+```json
+{
+  "name": "Название категории",
+  "slug": "category-slug",
+  "description": "Описание категории (опционально)"
+}
 ```
 
-### Moderation
+#### `GET /forum/:forumId/categories`
+Получить категории форума
 
-```
-GET    /forum/moderation/queue         - Get moderation queue
-POST   /forum/moderation/review/:id    - Review content
-POST   /forum/moderation/ban/:userId   - Ban user
-POST   /forum/moderation/report        - Report content
-GET    /forum/moderation/reports       - Get reported content
-```
+#### `DELETE /forum/:id`
+Удалить форум (только владелец)
 
-## Usage Examples
+### Посты
 
-### Creating a Thread
-
-```typescript
-const thread = await forumService.createThread({
-  title: 'Discussion about new features',
-  content: 'What features would you like to see next?',
-  categoryId: 'general',
-  tags: ['features', 'feedback'],
-  isPinned: false,
-  isLocked: false
-}, userId);
+#### `POST /forum/categories/:categoryId/posts`
+Создать пост в категории
+```json
+{
+  "title": "Заголовок поста",
+  "content": "Содержимое поста",
+  "slug": "post-slug",
+  "tags": ["тег1", "тег2"] // опционально
+}
 ```
 
-### Adding a Reply
+#### `GET /forum/categories/:categoryId/posts`
+Получить посты категории
+- Query параметры: `page` (по умолчанию 1), `limit` (по умолчанию 10)
 
-```typescript
-const reply = await forumReplyService.createReply({
-  threadId: 'thread123',
-  content: 'Great idea! I would love to see...',
-  parentReplyId: null, // null for top-level reply
-  quotedReplyId: 'reply456' // optional quote
-}, userId);
+#### `GET /forum/posts/:slug`
+Получить пост по slug
+
+#### `POST /forum/posts/:postId/replies`
+Создать ответ на пост
+```json
+{
+  "content": "Содержимое ответа"
+}
 ```
 
-### Searching Content
+#### `GET /forum/posts/:postId/replies`
+Получить ответы на пост
+- Query параметры: `page` (по умолчанию 1), `limit` (по умолчанию 20)
 
-```typescript
-const searchResults = await forumSearchService.search({
-  query: 'feature request',
-  categoryId: 'general',
-  tags: ['features'],
-  limit: 20,
-  offset: 0,
-  sortBy: 'relevance' // relevance, recent, popular
-});
-```
+#### `DELETE /forum/posts/:id`
+Удалить пост (только автор)
 
-## Configuration
+#### `DELETE /forum/replies/:id`
+Удалить ответ (только автор)
 
-### Pagination Settings
+## Использование
 
-```typescript
-const forumConfig = {
-  threadsPerPage: 25,
-  repliesPerPage: 50,
-  maxReplyDepth: 5,
-  searchResultsPerPage: 20
-};
-```
-
-### Rate Limiting
-
-```typescript
-const rateLimits = {
-  threadCreation: '5 per hour',
-  replyCreation: '30 per hour',
-  searchRequests: '100 per hour',
-  reportSubmission: '10 per day'
-};
-```
-
-### Content Limits
-
-```typescript
-const contentLimits = {
-  threadTitleMaxLength: 200,
-  threadContentMaxLength: 10000,
-  replyMaxLength: 5000,
-  maxTagsPerThread: 10,
-  maxAttachmentsPerPost: 5
-};
-```
-
-## Database Schema
-
-The module uses the following Prisma models:
-
-- `ForumCategory` - Forum categories and subcategories
-- `ForumThread` - Discussion threads
-- `ForumReply` - Replies to threads
-- `ForumTag` - Tags for categorizing content
-- `ForumReaction` - User reactions to posts
-- `ForumReport` - Content reports for moderation
-- `ForumModerationAction` - Moderation history
-
-## Security Features
-
-### Content Security
-- HTML sanitization to prevent XSS attacks
-- Content filtering for spam and inappropriate content
-- File upload validation for attachments
-- Rate limiting to prevent abuse
-
-### Access Control
-- Role-based permissions for moderation
-- Category-specific access control
-- User-based thread and reply ownership
-- Admin override capabilities
-
-### Audit Trail
-- Complete moderation action history
-- User activity tracking
-- Content revision history
-- Report handling logs
-
-## Performance Optimizations
-
-### Caching Strategy
-- Thread list caching with Redis
-- Category hierarchy caching
-- Search result caching
-- Frequently accessed content caching
-
-### Database Optimizations
-- Proper indexing for search queries
-- Efficient pagination with cursor-based approach
-- Optimized queries for nested replies
-- Connection pooling for high traffic
-
-### Search Performance
-- Full-text search indexes
-- Search result ranking algorithms
-- Auto-complete with trie structures
-- Search analytics for optimization
-
-## Integration
-
-To use this module in your application:
+### Импорт модуля
 
 ```typescript
 import { ForumModule } from './modules/forum';
 
 @Module({
   imports: [
+    // другие модули...
     ForumModule,
-    // other modules...
   ],
 })
 export class AppModule {}
 ```
 
-## Dependencies
+### Использование сервисов
 
-- `@nestjs/common` - Core NestJS functionality
-- `prisma` - Database ORM
-- `class-validator` - DTO validation
-- `@nestjs/swagger` - API documentation
-- `redis` - Caching layer
-- `dompurify` - HTML sanitization
+```typescript
+import { ForumService, ForumPostService } from './modules/forum';
 
-## Real-time Features
+@Injectable()
+export class SomeService {
+  constructor(
+    private readonly forumService: ForumService,
+    private readonly forumPostService: ForumPostService,
+  ) {}
 
-### WebSocket Events
-- New thread notifications
-- Reply notifications
-- Real-time thread updates
-- Moderation alerts
-- User activity status
+  async createForum() {
+    return this.forumService.createForum({
+      name: 'Мой форум',
+      slug: 'my-forum',
+      description: 'Описание моего форума'
+    }, BigInt(1)); // ID владельца
+  }
+}
+```
 
-### Live Updates
-- Real-time reply count updates
-- Live reaction updates
-- Instant notification delivery
-- Activity feed updates
+## Особенности
 
-## Moderation Workflow
+- Использует BigInt ID для оптимизации производительности
+- Поддерживает пагинацию для списков
+- Автоматическое создание и связывание тегов
+- Валидация уникальности slug
+- Проверка прав доступа для операций удаления
+- Подсчет количества постов и ответов
 
-### Content Review Process
-1. **Automatic Detection**: AI-powered content filtering
-2. **User Reports**: Community-driven reporting system
-3. **Moderation Queue**: Centralized review system
-4. **Action Taking**: Warn, edit, delete, or ban actions
-5. **Appeals Process**: User appeal system for moderation actions
+## Зависимости
 
-### Moderation Tools
-- Bulk moderation actions
-- Custom moderation rules
-- Automated warning system
-- Escalation procedures
-- Moderation analytics
+- `@nestjs/common`
+- `@nestjs/swagger`
+- `class-validator`
+- `class-transformer`
+- `prisma`
 
-## Future Enhancements
+## TODO
 
-- [ ] AI-powered content recommendations
-- [ ] Advanced spam detection with ML
-- [ ] Voice message support in replies
-- [ ] Live polling and voting features
-- [ ] Integration with external forum platforms
-- [ ] Advanced analytics dashboard
-- [ ] Mobile push notifications
-- [ ] Content translation support
+- [ ] Добавить аутентификацию и авторизацию
+- [ ] Добавить полнотекстовый поиск
+- [ ] Добавить модерацию контента
+- [ ] Добавить систему рейтингов
+- [ ] Добавить уведомления
+- [ ] Добавить файлы и изображения к постам

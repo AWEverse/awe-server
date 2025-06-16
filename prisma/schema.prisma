@@ -181,8 +181,7 @@ model RoleGlobally {
   createdAt   DateTime @default(now()) @db.Timestamptz(3)
   updatedAt   DateTime @updatedAt @db.Timestamptz(3)
 
-  users            User[]
-  forumPermissions ForumCategoryPermission[]
+  users User[]
 
   @@index([name])
   @@index([flags])
@@ -226,6 +225,9 @@ model User {
   totalLikes         BigInt @default(0)
   reputation         Int    @default(0) // Для форума
 
+  forumReplies ForumReply[]
+  forumPosts   ForumPost[]
+
   // Связи
   role                   RoleGlobally?           @relation(fields: [roleId], references: [id])
   devices                Device[]
@@ -255,26 +257,6 @@ model User {
   reports         Report[]       @relation("ReportedBy")
   reportedContent Report[]       @relation("ReportedUser")
   reviewedReports Report[]       @relation("ReviewedReports")
-
-  // Форум
-  ownedForums             Forum[]             @relation("ForumOwner")
-  forumModeratorRoles     ForumModerator[]    @relation("ForumModeratorRoles")
-  assignedForumModerators ForumModerator[]    @relation("AssignedForumModerators")
-  forumPosts              ForumPost[]
-  forumReplies            ForumReply[]
-  forumSubscriptions      ForumSubscription[]
-  forumVotes              ForumVote[]
-
-  // Модерация
-  moderatorActions ForumModerationLog[] @relation("ModeratorActions")
-  moderatedActions ForumModerationLog[] @relation("ModeratedUsers")
-
-  // Форум - дополнительные связи
-  categoryModerators ForumCategoryModerator[] @relation("CategoryModerators")
-  assignedModerators ForumCategoryModerator[] @relation("AssignedModerators")
-  forumTrackers      ForumTopicTracker[]      @relation("ForumTrackers")
-  forumReputation    ForumReputation?         @relation("UserReputation")
-  forumNotifications ForumNotificationQueue[] @relation("ForumNotifications")
 
   // Stickers, Emojis и Media
   createdStickerPacks StickerPack[]     @relation("CreatedStickerPacks")
@@ -1069,6 +1051,101 @@ model ContentTag {
   @@index([tagId])
 }
 
+// Forum - main container for categories and posts
+model Forum {
+  id          BigInt          @id @default(autoincrement())
+  name        String          @db.VarChar(128)
+  slug        String          @unique @db.VarChar(64) // For SEO-friendly URLs
+  description String?         @db.VarChar(500)
+  createdAt   DateTime        @default(now()) @db.Timestamptz(3)
+  updatedAt   DateTime        @default(now()) @updatedAt @db.Timestamptz(3)
+  ownerId     BigInt // References User (assumed to exist)
+  categories  ForumCategory[] // One-to-many with categories
+  posts       ForumPost[] // One-to-many with posts
+
+  @@index([slug])
+  @@index([ownerId])
+}
+
+// ForumCategory - single-level categories within a forum
+model ForumCategory {
+  id          BigInt      @id @default(autoincrement())
+  forumId     BigInt // References Forum
+  name        String      @db.VarChar(64)
+  slug        String      @unique @db.VarChar(64) // For SEO-friendly URLs
+  description String?     @db.VarChar(255)
+  createdAt   DateTime    @default(now()) @db.Timestamptz(3)
+  updatedAt   DateTime    @default(now()) @updatedAt @db.Timestamptz(3)
+  forum       Forum       @relation(fields: [forumId], references: [id], onDelete: Cascade)
+  posts       ForumPost[] // One-to-many with posts
+
+  @@index([forumId])
+  @@index([slug])
+}
+
+// ForumPost - posts within a category
+model ForumPost {
+  id         BigInt         @id @default(autoincrement())
+  forumId    BigInt // References Forum for quick access
+  categoryId BigInt // References Category
+  authorId   BigInt // References User (assumed to exist)
+  title      String         @db.VarChar(200)
+  content    String         @db.Text
+  slug       String         @unique @db.VarChar(200) // For SEO-friendly URLs
+  createdAt  DateTime       @default(now()) @db.Timestamptz(3)
+  updatedAt  DateTime       @default(now()) @updatedAt @db.Timestamptz(3)
+  forum      Forum          @relation(fields: [forumId], references: [id], onDelete: Cascade)
+  category   ForumCategory  @relation(fields: [categoryId], references: [id], onDelete: Cascade)
+  author     User           @relation(fields: [authorId], references: [id])
+  replies    ForumReply[] // One-to-many with replies
+  tags       ForumPostTag[] // Many-to-many with tags via ForumPostTag
+
+  @@index([forumId])
+  @@index([categoryId])
+  @@index([authorId])
+  @@index([slug])
+  @@index([createdAt])
+}
+
+// ForumReply - comments/replies to posts
+model ForumReply {
+  id        BigInt    @id @default(autoincrement())
+  postId    BigInt // References Post
+  authorId  BigInt // References User (assumed to exist)
+  content   String    @db.Text
+  createdAt DateTime  @default(now()) @db.Timestamptz(3)
+  updatedAt DateTime  @default(now()) @updatedAt @db.Timestamptz(3)
+  post      ForumPost @relation(fields: [postId], references: [id], onDelete: Cascade)
+  author    User      @relation(fields: [authorId], references: [id])
+
+  @@index([postId])
+  @@index([authorId])
+  @@index([createdAt])
+}
+
+// ForumTag - tags for categorizing posts
+model ForumTag {
+  id        BigInt         @id @default(autoincrement())
+  name      String         @unique @db.VarChar(32)
+  createdAt DateTime       @default(now()) @db.Timestamptz(3)
+  posts     ForumPostTag[] // Many-to-many with posts via ForumPostTag
+
+  @@index([name])
+}
+
+// ForumPostTag - junction table for post-tag relationship
+model ForumPostTag {
+  id     BigInt    @id @default(autoincrement())
+  postId BigInt // References Post
+  tagId  BigInt // References Tag
+  post   ForumPost @relation(fields: [postId], references: [id], onDelete: Cascade)
+  tag    ForumTag  @relation(fields: [tagId], references: [id], onDelete: Cascade)
+
+  @@unique([postId, tagId])
+  @@index([postId])
+  @@index([tagId])
+}
+
 // ===== СОЦИАЛЬНАЯ СЕТЬ =====
 
 model Subscription {
@@ -1166,387 +1243,6 @@ model Notification {
   @@index([flags])
   @@index([createdAt])
   @@index([userId, flags, createdAt])
-}
-
-// ===== ФОРУМ =====
-
-// Корневая модель форума - основной контейнер для всех категорий и постов
-model Forum {
-  id          BigInt  @id @default(autoincrement())
-  name        String  @db.VarChar(128)
-  slug        String  @unique @db.VarChar(64) // Для SEO URL
-  description String? @db.VarChar(500)
-  logoUrl     String? @db.VarChar(300)
-  bannerUrl   String? @db.VarChar(300)
-
-  // Битовые флаги: active(1), public(2), moderated(4), archived(8), featured(16)
-  flags Int @default(3) // active + public by default
-
-  // Настройки форума
-  settings Json? // Конфигурация: правила, стили, разрешения
-
-  // Денормализованная статистика для производительности
-  categoriesCount Int @default(0)
-  postsCount      Int @default(0)
-  topicsCount     Int @default(0)
-  repliesCount    Int @default(0)
-  usersCount      Int @default(0) // Уникальные пользователи
-
-  // Активность
-  lastPostAt     DateTime? @db.Timestamptz(3)
-  lastPostId     BigInt? // Для быстрого доступа к последнему посту
-  lastActivityAt DateTime? @db.Timestamptz(3)
-
-  // Владелец и модерация
-  ownerId   BigInt
-  createdAt DateTime @default(now()) @db.Timestamptz(3)
-  updatedAt DateTime @default(now()) @updatedAt @db.Timestamptz(3)
-
-  // Связи
-  owner         User                 @relation("ForumOwner", fields: [ownerId], references: [id])
-  categories    ForumCategory[]      @relation("ForumCategories")
-  moderators    ForumModerator[]     @relation("ForumModerators")
-  configuration ForumConfiguration[] @relation("ForumConfig")
-  analytics     ForumAnalytics[]     @relation("ForumAnalytics")
-
-  @@index([slug])
-  @@index([flags])
-  @@index([ownerId])
-  @@index([lastActivityAt])
-  @@index([flags, lastActivityAt]) // Для списка активных форумов
-}
-
-// Модераторы форума (отдельно от категорий)
-model ForumModerator {
-  id          BigInt    @id @default(autoincrement())
-  forumId     BigInt
-  userId      BigInt
-  permissions BigInt    @default(0) // Битовые флаги разрешений
-  assignedBy  BigInt
-  assignedAt  DateTime  @default(now()) @db.Timestamptz(3)
-  expiresAt   DateTime? @db.Timestamptz(3)
-  isActive    Boolean   @default(true)
-
-  forum     Forum @relation("ForumModerators", fields: [forumId], references: [id], onDelete: Cascade)
-  moderator User  @relation("ForumModeratorRoles", fields: [userId], references: [id], onDelete: Cascade)
-  assigner  User  @relation("AssignedForumModerators", fields: [assignedBy], references: [id], onDelete: Restrict)
-
-  @@unique([forumId, userId])
-  @@index([forumId])
-  @@index([userId])
-  @@index([assignedBy])
-  @@index([isActive, expiresAt])
-}
-
-// Продвинутая модерация категорий форума
-model ForumCategoryModerator {
-  id          BigInt    @id @default(autoincrement())
-  categoryId  BigInt
-  userId      BigInt
-  permissions BigInt    @default(0) // Битовые флаги для разрешений модератора (64 бита)
-  assignedBy  BigInt
-  assignedAt  DateTime  @default(now()) @db.Timestamptz(3)
-  expiresAt   DateTime? @db.Timestamptz(3)
-  isActive    Boolean   @default(true)
-
-  category  ForumCategory @relation(fields: [categoryId], references: [id], onDelete: Cascade)
-  moderator User          @relation("CategoryModerators", fields: [userId], references: [id], onDelete: Cascade)
-  assigner  User          @relation("AssignedModerators", fields: [assignedBy], references: [id], onDelete: Restrict)
-
-  @@unique([categoryId, userId])
-  @@index([categoryId])
-  @@index([userId])
-  @@index([assignedBy])
-  @@index([isActive, expiresAt])
-}
-
-// Конфигурация форума
-model ForumConfiguration {
-  id          Int     @id @default(autoincrement())
-  forumId     BigInt // Привязка к форуму
-  key         String  @db.VarChar(64)
-  value       String  @db.Text
-  type        String  @default("string") @db.VarChar(16) // string, number, boolean, json
-  description String? @db.VarChar(255)
-  isPublic    Boolean @default(false) // Доступно ли через API
-
-  createdAt DateTime @default(now()) @db.Timestamptz(3)
-  updatedAt DateTime @default(now()) @updatedAt @db.Timestamptz(3)
-
-  forum Forum @relation("ForumConfig", fields: [forumId], references: [id], onDelete: Cascade)
-
-  @@unique([forumId, key])
-  @@index([forumId])
-  @@index([key])
-  @@index([isPublic])
-}
-
-// Отслеживание прочитанных тем пользователями
-model ForumTopicTracker {
-  id        BigInt   @id @default(autoincrement())
-  userId    BigInt
-  postId    BigInt
-  lastRead  DateTime @default(now()) @db.Timestamptz(3)
-  readCount Int      @default(0) // Количество прочитанных ответов
-
-  user User      @relation("ForumTrackers", fields: [userId], references: [id], onDelete: Cascade)
-  post ForumPost @relation("PostTrackers", fields: [postId], references: [id], onDelete: Cascade)
-
-  @@unique([userId, postId])
-  @@index([userId])
-  @@index([postId])
-  @@index([lastRead])
-}
-
-model ForumCategory {
-  id          BigInt  @id @default(autoincrement())
-  forumId     BigInt // Привязка к форуму
-  name        String  @db.VarChar(64)
-  slug        String  @unique @db.VarChar(64) // Для SEO-дружественных URL
-  description String? @db.VarChar(255)
-  color       String? @db.Char(7)
-  icon        String? @db.VarChar(32) // Unicode emoji или icon class
-  position    Int     @default(0)
-  parentId    BigInt? // Для вложенных категорий (макс 3 уровня)
-  level       Int     @default(0) // Уровень вложенности (0-2)
-
-  // Битовые флаги: active(1), moderated(2), private(4), archived(8)
-  flags Int @default(1)
-
-  // Денормализованная статистика
-  postsCount   Int @default(0)
-  repliesCount Int @default(0)
-  topicsCount  Int @default(0)
-
-  createdAt DateTime @default(now()) @db.Timestamptz(3)
-  updatedAt DateTime @default(now()) @updatedAt @db.Timestamptz(3)
-
-  // Связи
-  forum       Forum                     @relation("ForumCategories", fields: [forumId], references: [id], onDelete: Cascade)
-  parent      ForumCategory?            @relation("CategoryHierarchy", fields: [parentId], references: [id])
-  children    ForumCategory[]           @relation("CategoryHierarchy")
-  posts       ForumPost[]
-  permissions ForumCategoryPermission[]
-  moderators  ForumCategoryModerator[]
-  analytics   ForumAnalytics[]          @relation("CategoryAnalytics")
-
-  @@index([forumId])
-  @@index([position])
-  @@index([flags])
-  @@index([postsCount])
-  @@index([parentId])
-  @@index([slug])
-  @@index([level]) // Для ограничения уровней вложенности
-  @@index([parentId, position]) // Для иерархического вывода
-  @@index([forumId, position]) // Для категорий в форуме
-}
-
-model ForumCategoryPermission {
-  id          BigInt   @id @default(autoincrement())
-  categoryId  BigInt
-  roleId      BigInt
-  permissions BigInt   @default(0) // Битовая маска разрешений
-  createdAt   DateTime @default(now()) @db.Timestamptz(3)
-
-  category ForumCategory @relation(fields: [categoryId], references: [id], onDelete: Cascade)
-  role     RoleGlobally  @relation(fields: [roleId], references: [id], onDelete: Cascade)
-
-  @@unique([categoryId, roleId])
-  @@index([categoryId])
-  @@index([roleId])
-}
-
-model ForumPost {
-  id         BigInt @id @default(autoincrement())
-  categoryId BigInt
-  authorId   BigInt
-  title      String @db.VarChar(200)
-  content    String @db.Text
-  slug       String @unique @db.VarChar(200) // SEO-дружественный URL
-
-  // Битовые флаги: pinned(1), locked(2), featured(4), solved(8), hidden(16), deleted(32)
-  flags Int @default(0)
-
-  // Денормализованная статистика
-  viewsCount    Int @default(0)
-  repliesCount  Int @default(0)
-  likesCount    Int @default(0)
-  dislikesCount Int @default(0)
-
-  // Временные метки
-  createdAt   DateTime  @default(now()) @db.Timestamptz(3)
-  updatedAt   DateTime  @updatedAt @db.Timestamptz(3)
-  lastReplyAt DateTime? @db.Timestamptz(3)
-  lastReplyBy BigInt? // ID последнего ответившего пользователя
-
-  // Полнотекстовый поиск (PostgreSQL tsvector для оптимального поиска)
-  searchVector Unsupported("tsvector")?
-
-  // Связи
-  category      ForumCategory       @relation(fields: [categoryId], references: [id])
-  author        User                @relation(fields: [authorId], references: [id])
-  replies       ForumReply[]
-  votes         ForumVote[]         @relation("PostVotes")
-  subscriptions ForumSubscription[]
-  tags          ForumPostTag[]
-  attachments   ForumAttachment[]
-  trackers      ForumTopicTracker[] @relation("PostTrackers")
-  seoPost       ForumPostSEO?       @relation("PostSEO")
-  hotTopics     ForumHotTopics[]    @relation("HotTopics")
-
-  @@index([categoryId])
-  @@index([authorId])
-  @@index([flags])
-  @@index([createdAt])
-  @@index([lastReplyAt])
-  @@index([viewsCount])
-  @@index([likesCount])
-  @@index([slug])
-  @@index([categoryId, flags, lastReplyAt]) // Основной индекс для списка тем
-  @@index([categoryId, flags, createdAt]) // Для сортировки по дате создания
-}
-
-model ForumReply {
-  id       BigInt  @id @default(autoincrement())
-  postId   BigInt
-  authorId BigInt
-  content  String  @db.Text
-  parentId BigInt? // Для древовидных ответов
-
-  // Битовые флаги: deleted(1), edited(2), solution(4), hidden(8)
-  flags Int @default(0)
-
-  likesCount    Int @default(0)
-  dislikesCount Int @default(0)
-
-  createdAt DateTime @default(now()) @db.Timestamptz(3)
-  updatedAt DateTime @default(now()) @updatedAt @db.Timestamptz(3)
-
-  // Полнотекстовый поиск (PostgreSQL tsvector для оптимального поиска)
-  searchVector Unsupported("tsvector")?
-
-  // Связи
-  post        ForumPost         @relation(fields: [postId], references: [id], onDelete: Cascade)
-  author      User              @relation(fields: [authorId], references: [id])
-  parent      ForumReply?       @relation("ReplyHierarchy", fields: [parentId], references: [id])
-  children    ForumReply[]      @relation("ReplyHierarchy")
-  votes       ForumVote[]       @relation("ReplyVotes")
-  attachments ForumAttachment[]
-
-  @@index([postId])
-  @@index([authorId])
-  @@index([createdAt])
-  @@index([flags])
-  @@index([parentId])
-  @@index([postId, createdAt]) // Основной индекс для ответов в теме
-}
-
-model ForumVote {
-  id        BigInt   @id @default(autoincrement())
-  userId    BigInt
-  postId    BigInt?
-  replyId   BigInt?
-  value     Int // 1 для upvote, -1 для downvote
-  createdAt DateTime @default(now()) @db.Timestamptz(3)
-
-  user  User        @relation(fields: [userId], references: [id], onDelete: Cascade)
-  post  ForumPost?  @relation("PostVotes", fields: [postId], references: [id], onDelete: Cascade)
-  reply ForumReply? @relation("ReplyVotes", fields: [replyId], references: [id], onDelete: Cascade)
-
-  @@unique([userId, postId])
-  @@unique([userId, replyId])
-  @@index([userId])
-  @@index([postId])
-  @@index([replyId])
-  @@index([value])
-}
-
-model ForumSubscription {
-  id        BigInt   @id @default(autoincrement())
-  userId    BigInt
-  postId    BigInt
-  flags     Int      @default(1) // notifications(1), email(2), instant(4)
-  createdAt DateTime @default(now()) @db.Timestamptz(3)
-
-  user User      @relation(fields: [userId], references: [id], onDelete: Cascade)
-  post ForumPost @relation(fields: [postId], references: [id], onDelete: Cascade)
-
-  @@unique([userId, postId])
-  @@index([userId])
-  @@index([postId])
-}
-
-model ForumTag {
-  id          BigInt   @id @default(autoincrement())
-  name        String   @unique @db.VarChar(32)
-  description String?  @db.VarChar(255)
-  color       String?  @db.Char(7)
-  usageCount  Int      @default(0)
-  flags       Int      @default(1) // active(1), moderated(2)
-  createdAt   DateTime @default(now()) @db.Timestamptz(3)
-
-  posts ForumPostTag[]
-
-  @@index([name])
-  @@index([usageCount])
-  @@index([flags])
-}
-
-model ForumPostTag {
-  id     BigInt @id @default(autoincrement())
-  postId BigInt
-  tagId  BigInt
-
-  post ForumPost @relation(fields: [postId], references: [id], onDelete: Cascade)
-  tag  ForumTag  @relation(fields: [tagId], references: [id], onDelete: Cascade)
-
-  @@unique([postId, tagId])
-  @@index([postId])
-  @@index([tagId])
-}
-
-model ForumAttachment {
-  id           BigInt  @id @default(autoincrement())
-  postId       BigInt?
-  replyId      BigInt?
-  fileName     String  @db.VarChar(255)
-  originalName String  @db.VarChar(255)
-  mimeType     String  @db.VarChar(100)
-  fileSize     BigInt
-  url          String  @db.VarChar(500)
-  thumbnailUrl String? @db.VarChar(500)
-
-  createdAt DateTime @default(now()) @db.Timestamptz(3)
-
-  post  ForumPost?  @relation(fields: [postId], references: [id], onDelete: Cascade)
-  reply ForumReply? @relation(fields: [replyId], references: [id], onDelete: Cascade)
-
-  @@index([postId])
-  @@index([replyId])
-  @@index([mimeType])
-}
-
-// Модерация форума
-model ForumModerationLog {
-  id           BigInt           @id @default(autoincrement())
-  moderatorId  BigInt
-  targetUserId BigInt?
-  postId       BigInt?
-  replyId      BigInt?
-  action       ModerationAction
-  reason       String?          @db.VarChar(500)
-  metadata     Json? // Дополнительные данные о действии
-  createdAt    DateTime         @default(now()) @db.Timestamptz(3)
-
-  moderator  User  @relation("ModeratorActions", fields: [moderatorId], references: [id])
-  targetUser User? @relation("ModeratedUsers", fields: [targetUserId], references: [id])
-
-  @@index([moderatorId])
-  @@index([targetUserId])
-  @@index([postId])
-  @@index([replyId])
-  @@index([action])
-  @@index([createdAt])
 }
 
 // ===== МОДЕРАЦИЯ И БЕЗОПАСНОСТЬ =====
@@ -1713,140 +1409,6 @@ model NotificationSettings {
   @@index([userId])
   @@index([chatId])
   @@index([notificationType])
-}
-
-// ===== ДОПОЛНИТЕЛЬНЫЕ МОДЕЛИ ДЛЯ ФОРУМА =====
-
-// SEO и метаданные для форумных постов
-model ForumPostSEO {
-  id           BigInt  @id @default(autoincrement())
-  postId       BigInt  @unique
-  metaTitle    String? @db.VarChar(70) // Оптимальная длина для поисковиков
-  metaDesc     String? @db.VarChar(160) // Оптимальная длина для поисковиков
-  keywords     String? @db.VarChar(255)
-  canonicalUrl String? @db.VarChar(500)
-  ogImage      String? @db.VarChar(500)
-  schema       Json? // Структурированные данные Schema.org
-
-  createdAt DateTime @default(now()) @db.Timestamptz(3)
-  updatedAt DateTime @default(now()) @updatedAt @db.Timestamptz(3)
-
-  post ForumPost @relation("PostSEO", fields: [postId], references: [id], onDelete: Cascade)
-
-  @@index([postId])
-}
-
-// Система репутации и ачивок
-model ForumReputation {
-  id     BigInt @id @default(autoincrement())
-  userId BigInt
-  points Int    @default(0)
-  level  Int    @default(1)
-  badges Json? // Массив значков пользователя
-
-  // Статистика активности
-  postsCreated    Int @default(0)
-  repliesCreated  Int @default(0)
-  likesReceived   Int @default(0)
-  likesGiven      Int @default(0)
-  bestAnswers     Int @default(0)
-  moderationScore Int @default(0)
-
-  lastCalculated DateTime @default(now()) @db.Timestamptz(3)
-
-  user User @relation("UserReputation", fields: [userId], references: [id], onDelete: Cascade)
-
-  @@unique([userId])
-  @@index([points])
-  @@index([level])
-  @@index([lastCalculated])
-}
-
-// Кэш горячих тем
-model ForumHotTopics {
-  id       BigInt  @id @default(autoincrement())
-  postId   BigInt
-  score    Float // Алгоритмический скор популярности
-  position Int // Позиция в рейтинге
-  period   String  @db.VarChar(16) // hour, day, week, month
-  region   String? @db.VarChar(8) // Опционально по регионам
-
-  calculatedAt DateTime @default(now()) @db.Timestamptz(3)
-  expiresAt    DateTime @db.Timestamptz(3)
-
-  post ForumPost @relation("HotTopics", fields: [postId], references: [id], onDelete: Cascade)
-
-  @@unique([postId, period, region])
-  @@index([period, score])
-  @@index([position, period])
-  @@index([expiresAt])
-}
-
-// Расширенная аналитика форума
-model ForumAnalytics {
-  id         BigInt   @id @default(autoincrement())
-  date       DateTime @db.Date
-  forumId    BigInt? // Аналитика для всего форума
-  categoryId BigInt? // Аналитика для конкретной категории
-
-  // Метрики активности
-  newPosts       Int @default(0)
-  newReplies     Int @default(0)
-  newUsers       Int @default(0)
-  totalViews     Int @default(0)
-  uniqueVisitors Int @default(0)
-  avgSessionTime Int @default(0) // В секундах
-
-  // Метрики вовлеченности
-  likesGiven    Int @default(0)
-  sharesCount   Int @default(0)
-  searchQueries Int @default(0)
-
-  // Модерация
-  reportsCreated   Int @default(0)
-  actionsPerformed Int @default(0)
-
-  forum    Forum?         @relation("ForumAnalytics", fields: [forumId], references: [id])
-  category ForumCategory? @relation("CategoryAnalytics", fields: [categoryId], references: [id])
-
-  @@unique([date, forumId])
-  @@unique([date, categoryId])
-  @@index([date])
-  @@index([forumId])
-  @@index([categoryId])
-  @@index([totalViews])
-  @@index([uniqueVisitors])
-}
-
-// Система уведомлений форума
-model ForumNotificationQueue {
-  id         BigInt @id @default(autoincrement())
-  userId     BigInt
-  type       String @db.VarChar(32) // mention, reply, like, follow
-  entityType String @db.VarChar(16) // post, reply, user
-  entityId   BigInt
-
-  // Настройки доставки
-  isRead  Boolean @default(false)
-  isEmail Boolean @default(false)
-  isPush  Boolean @default(false)
-
-  // Метаданные
-  title   String @db.VarChar(128)
-  message String @db.VarChar(255)
-  data    Json? // Дополнительные данные
-
-  // Временные метки
-  createdAt DateTime  @default(now()) @db.Timestamptz(3)
-  sentAt    DateTime? @db.Timestamptz(3)
-  readAt    DateTime? @db.Timestamptz(3)
-
-  user User @relation("ForumNotifications", fields: [userId], references: [id], onDelete: Cascade)
-
-  @@index([userId, isRead])
-  @@index([type, createdAt])
-  @@index([isRead, sentAt])
-  @@index([entityType, entityId])
 }
 
 // ===== КЭШИРОВАНИЕ И АНАЛИТИКА =====

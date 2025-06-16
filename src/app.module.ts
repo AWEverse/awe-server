@@ -8,7 +8,7 @@ import { PrismaModule } from './libs/db/prisma.service';
 import { AuthModule } from './modules/auth/auth.module';
 import { MessangerModule } from './modules/messanger/messanger.module';
 import { UsersModule } from './modules/users/users.module';
-import { ForumModule } from './modules/forum/forum.module';
+import { ForumModule } from './modules/forum';
 import { CommonModule } from './modules/common/common.module';
 import { VideoHostingModule } from './modules/video-hosting/video-hosting.module';
 
@@ -32,7 +32,7 @@ import { VideoHostingModule } from './modules/video-hosting/video-hosting.module
     MessangerModule,
     UsersModule,
     VideoHostingModule,
-    //ForumModule,
+    ForumModule,
   ],
 })
 export class AppModule {}

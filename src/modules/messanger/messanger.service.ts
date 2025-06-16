@@ -198,32 +198,31 @@ export class MessangerService {
       })),
     };
   }
-
-  async createChatFolder(data: Prisma.ChatFolderCreateInput) {
+  async createChatFolder(data: Prisma.ChatFolderCreateInput): Promise<any> {
     return this.prisma.chatFolder.create({ data });
   }
 
-  async getChatFolderById(id: number) {
+  async getChatFolderById(id: number): Promise<any | null> {
     return this.prisma.chatFolder.findUnique({ where: { id } });
   }
 
-  async updateChatFolder(id: number, data: Prisma.ChatFolderUpdateInput) {
+  async updateChatFolder(id: number, data: Prisma.ChatFolderUpdateInput): Promise<any> {
     return this.prisma.chatFolder.update({ where: { id }, data });
   }
 
-  async deleteChatFolder(id: number) {
+  async deleteChatFolder(id: number): Promise<any> {
     return this.prisma.chatFolder.delete({ where: { id } });
   }
 
-  async addChatToFolder(data: Prisma.ChatFolderItemCreateInput) {
+  async addChatToFolder(data: Prisma.ChatFolderItemCreateInput): Promise<any> {
     return this.prisma.chatFolderItem.create({ data });
   }
 
-  async removeChatFromFolder(id: number) {
+  async removeChatFromFolder(id: number): Promise<any> {
     return this.prisma.chatFolderItem.delete({ where: { id } });
   }
 
-  async getChatsInFolder(folderId: number) {
+  async getChatsInFolder(folderId: number): Promise<any[]> {
     return this.prisma.chatFolderItem.findMany({
       where: { folderId },
       include: { chat: true },
@@ -1474,7 +1473,7 @@ export class MessangerService {
     return this.getUserStatistics(userId, userId);
   }
 
-  async getMessageById(messageId: bigint) {
+  async getMessageById(messageId: bigint): Promise<any | null> {
     const message = await this.prisma.message.findUnique({
       where: { id: messageId },
       select: {

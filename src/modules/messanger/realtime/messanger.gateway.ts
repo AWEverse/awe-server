@@ -163,6 +163,7 @@ export class MessangerGateway implements OnGatewayInit, OnGatewayConnection, OnG
       client.disconnect();
     }
   }
+
   async handleDisconnect(client: AuthenticatedSocket) {
     if (client.userId) {
       this.unregisterUserConnection(client);

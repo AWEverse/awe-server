@@ -618,3 +618,6 @@ export class ArchiveMessagesDto {
   @Transform(({ value }) => new Date(value))
   beforeDate: Date;
 }
+
+// Export new DTOs for stickers, GIFs, and emojis
+export * from './stickers-gifs.dto';

@@ -26,8 +26,14 @@ import {
   UpdateParticipantRoleDto,
   CheckPermissionsDto,
   ArchiveMessagesDto,
+  AddReactionDto,
+  RemoveReactionDto,
+  ForwardMessageDto,
+  MuteParticipantDto,
+  SearchChatsDto,
+  MarkMessagesReadDto,
 } from './dto/chat.dto';
-import { SendStickerDto, SendGifDto, SendCustomEmojiDto } from './dto/realtime.dto';
+import { SendStickerDto, SendGifDto, SendCustomEmojiDto } from './dto/stickers-gifs.dto';
 import {
   ChatResponseDto,
   MessageResponseDto,
@@ -864,15 +870,20 @@ export class MessangerController {
   ) {
     try {
       const userId = this.getUserIdFromRequest(req);
-      this.logger.log(`Sending sticker in chat ${chatId} by user ${userId}`);
-
+      this.logger.log(
+        `Sending sticker ${sendStickerDto.stickerId} to chat ${chatId} by user ${userId}`,
+      );
       return await this.messengerService.sendSticker(
         BigInt(chatId),
         userId,
-        BigInt(sendStickerDto.stickerId),
+        sendStickerDto.stickerId,
+        {
+          replyToId: sendStickerDto.replyToId,
+          threadId: sendStickerDto.threadId,
+        },
       );
     } catch (error) {
-      this.logger.error(`Error sending sticker in chat ${chatId}`, error.stack);
+      this.logger.error(`Error sending sticker to chat ${chatId}`, error.stack);
       throw error;
     }
   }
@@ -891,11 +902,13 @@ export class MessangerController {
   ) {
     try {
       const userId = this.getUserIdFromRequest(req);
-      this.logger.log(`Sending GIF in chat ${chatId} by user ${userId}`);
-
-      return await this.messengerService.sendGif(BigInt(chatId), userId, BigInt(sendGifDto.gifId));
+      this.logger.log(`Sending GIF ${sendGifDto.gifId} to chat ${chatId} by user ${userId}`);
+      return await this.messengerService.sendGif(BigInt(chatId), userId, sendGifDto.gifId, {
+        replyToId: sendGifDto.replyToId,
+        threadId: sendGifDto.threadId,
+      });
     } catch (error) {
-      this.logger.error(`Error sending GIF in chat ${chatId}`, error.stack);
+      this.logger.error(`Error sending GIF to chat ${chatId}`, error.stack);
       throw error;
     }
   }
@@ -914,15 +927,21 @@ export class MessangerController {
   ) {
     try {
       const userId = this.getUserIdFromRequest(req);
-      this.logger.log(`Sending custom emoji in chat ${chatId} by user ${userId}`);
+      this.logger.log(
+        `Sending custom emoji ${sendCustomEmojiDto.emojiId} to chat ${chatId} by user ${userId}`,
+      );
 
       return await this.messengerService.sendCustomEmoji(
         BigInt(chatId),
         userId,
-        BigInt(sendCustomEmojiDto.customEmojiId),
+        sendCustomEmojiDto.emojiId,
+        {
+          replyToId: sendCustomEmojiDto.replyToId,
+          threadId: sendCustomEmojiDto.threadId,
+        },
       );
     } catch (error) {
-      this.logger.error(`Error sending custom emoji in chat ${chatId}`, error.stack);
+      this.logger.error(`Error sending custom emoji to chat ${chatId}`, error.stack);
       throw error;
     }
   }
@@ -959,9 +978,10 @@ export class MessangerController {
   @ApiResponse({ status: 200, description: 'Trending GIFs retrieved successfully' })
   async getTrendingGifs(@Query('limit') limit?: number) {
     try {
-      this.logger.log(`Getting trending GIFs with limit ${limit || 20}`);
+      const normalizedLimit = limit ? Number(limit) : 20;
+      this.logger.log(`Getting trending GIFs, limit: ${normalizedLimit}`);
 
-      return await this.messengerService.getTrendingGifs(limit || 20);
+      return await this.messengerService.getTrendingGifs(normalizedLimit);
     } catch (error) {
       this.logger.error('Error getting trending GIFs', error.stack);
       throw error;
@@ -983,11 +1003,337 @@ export class MessangerController {
   @ApiResponse({ status: 200, description: 'GIFs found successfully' })
   async searchGifs(@Query('q') query: string, @Query('limit') limit?: number) {
     try {
-      this.logger.log(`Searching GIFs for query: ${query}`);
+      const normalizedLimit = limit ? Number(limit) : 20;
+      this.logger.log(`Searching GIFs with query: ${query}, limit: ${normalizedLimit}`);
 
-      return await this.messengerService.searchGifs(query, limit || 20);
+      return await this.messengerService.searchGifs(query, normalizedLimit);
     } catch (error) {
-      this.logger.error(`Error searching GIFs for query: ${query}`, error.stack);
+      this.logger.error(`Error searching GIFs with query: ${query}`, error.stack);
+      throw error;
+    }
+  }
+
+  // ===============================================
+  // НЕДОСТАЮЩИЕ ЭНДПОИНТЫ
+  // ===============================================
+
+  @Post('messages/:messageId/reactions')
+  @ApiOperation({
+    summary: 'Add reaction to message',
+    description: 'Add an emoji reaction to a message',
+  })
+  @ApiParam({ name: 'messageId', description: 'Message ID', type: 'string' })
+  @ApiResponse({ status: 201, description: 'Reaction added successfully' })
+  @ApiResponse({ status: 400, description: 'Invalid reaction data' })
+  @ApiResponse({ status: 403, description: 'No access to this chat' })
+  async addReaction(
+    @Param('messageId', ParseIntPipe) messageId: number,
+    @Body(ValidationPipe) addReactionDto: AddReactionDto,
+    @Request() req: UserRequest,
+  ) {
+    try {
+      const userId = this.getUserIdFromRequest(req);
+      this.logger.log(
+        `Adding reaction ${addReactionDto.reaction} to message ${messageId} by user ${userId}`,
+      );
+
+      return await this.messengerService.addReaction(
+        BigInt(messageId),
+        userId,
+        addReactionDto.reaction,
+      );
+    } catch (error) {
+      this.logger.error(`Error adding reaction to message ${messageId}`, error.stack);
+      throw error;
+    }
+  }
+
+  @Delete('messages/:messageId/reactions')
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({
+    summary: 'Remove reaction from message',
+    description: 'Remove an emoji reaction from a message',
+  })
+  @ApiParam({ name: 'messageId', description: 'Message ID', type: 'string' })
+  @ApiResponse({ status: 200, description: 'Reaction removed successfully' })
+  @ApiResponse({ status: 404, description: 'Reaction not found' })
+  async removeReaction(
+    @Param('messageId', ParseIntPipe) messageId: number,
+    @Body(ValidationPipe) removeReactionDto: RemoveReactionDto,
+    @Request() req: UserRequest,
+  ) {
+    try {
+      const userId = this.getUserIdFromRequest(req);
+      this.logger.log(
+        `Removing reaction ${removeReactionDto.reaction} from message ${messageId} by user ${userId}`,
+      );
+
+      return await this.messengerService.removeReaction(
+        BigInt(messageId),
+        userId,
+        removeReactionDto.reaction,
+      );
+    } catch (error) {
+      this.logger.error(`Error removing reaction from message ${messageId}`, error.stack);
+      throw error;
+    }
+  }
+
+  @Post('messages/forward')
+  @ApiOperation({
+    summary: 'Forward messages',
+    description: 'Forward one or more messages to target chats',
+  })
+  @ApiResponse({ status: 201, description: 'Messages forwarded successfully' })
+  @ApiResponse({ status: 403, description: 'No access to source or target chats' })
+  async forwardMessages(
+    @Body(ValidationPipe) forwardMessageDto: ForwardMessageDto,
+    @Request() req: UserRequest,
+  ) {
+    try {
+      const userId = this.getUserIdFromRequest(req);
+      this.logger.log(
+        `Forwarding message ${forwardMessageDto.messageId} to ${forwardMessageDto.targetChatIds.length} chats by user ${userId}`,
+      );
+
+      return await this.messengerService.forwardMessages(
+        [forwardMessageDto.messageId],
+        forwardMessageDto.targetChatIds,
+        userId,
+        forwardMessageDto.comment,
+      );
+    } catch (error) {
+      this.logger.error(`Error forwarding message ${forwardMessageDto.messageId}`, error.stack);
+      throw error;
+    }
+  }
+
+  @Post('chats/:chatId/messages/:messageId/pin')
+  @ApiOperation({
+    summary: 'Pin message in chat',
+    description: 'Pin a message in the chat for all participants to see',
+  })
+  @ApiParam({ name: 'chatId', description: 'Chat ID', type: 'string' })
+  @ApiParam({ name: 'messageId', description: 'Message ID to pin', type: 'string' })
+  @ApiResponse({ status: 200, description: 'Message pinned successfully' })
+  @ApiResponse({ status: 403, description: 'No permission to pin messages' })
+  async pinMessage(
+    @Param('chatId', ParseIntPipe) chatId: number,
+    @Param('messageId', ParseIntPipe) messageId: number,
+    @Request() req: UserRequest,
+  ) {
+    try {
+      const userId = this.getUserIdFromRequest(req);
+      this.logger.log(`Pinning message ${messageId} in chat ${chatId} by user ${userId}`);
+
+      return await this.messengerService.pinMessage(BigInt(chatId), BigInt(messageId), userId);
+    } catch (error) {
+      this.logger.error(`Error pinning message ${messageId} in chat ${chatId}`, error.stack);
+      throw error;
+    }
+  }
+
+  @Delete('chats/:chatId/pinned')
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({
+    summary: 'Unpin message in chat',
+    description: 'Remove pinned message from chat',
+  })
+  @ApiParam({ name: 'chatId', description: 'Chat ID', type: 'string' })
+  @ApiResponse({ status: 200, description: 'Message unpinned successfully' })
+  @ApiResponse({ status: 403, description: 'No permission to unpin messages' })
+  async unpinMessage(@Param('chatId', ParseIntPipe) chatId: number, @Request() req: UserRequest) {
+    try {
+      const userId = this.getUserIdFromRequest(req);
+      this.logger.log(`Unpinning message in chat ${chatId} by user ${userId}`);
+
+      return await this.messengerService.unpinMessage(BigInt(chatId), userId);
+    } catch (error) {
+      this.logger.error(`Error unpinning message in chat ${chatId}`, error.stack);
+      throw error;
+    }
+  }
+
+  @Get('chats/:chatId/pinned')
+  @ApiOperation({
+    summary: 'Get pinned messages',
+    description: 'Get all pinned messages in the chat',
+  })
+  @ApiParam({ name: 'chatId', description: 'Chat ID', type: 'string' })
+  @ApiResponse({ status: 200, description: 'Pinned messages retrieved successfully' })
+  @ApiResponse({ status: 403, description: 'No access to this chat' })
+  async getPinnedMessages(
+    @Param('chatId', ParseIntPipe) chatId: number,
+    @Request() req: UserRequest,
+  ) {
+    try {
+      const userId = this.getUserIdFromRequest(req);
+      this.logger.log(`Getting pinned messages for chat ${chatId}`);
+
+      return await this.messengerService.getPinnedMessages(BigInt(chatId), userId);
+    } catch (error) {
+      this.logger.error(`Error getting pinned messages for chat ${chatId}`, error.stack);
+      throw error;
+    }
+  }
+
+  @Put('chats/:chatId/participants/:userId/mute')
+  @ApiOperation({
+    summary: 'Mute participant',
+    description: 'Mute a participant in the chat',
+  })
+  @ApiParam({ name: 'chatId', description: 'Chat ID', type: 'string' })
+  @ApiParam({ name: 'userId', description: 'User ID to mute', type: 'string' })
+  @ApiResponse({ status: 200, description: 'Participant muted successfully' })
+  @ApiResponse({ status: 403, description: 'No permission to mute participants' })
+  async muteParticipant(
+    @Param('chatId', ParseIntPipe) chatId: number,
+    @Param('userId', ParseIntPipe) userId: number,
+    @Body(ValidationPipe) muteParticipantDto: MuteParticipantDto,
+    @Request() req: UserRequest,
+  ) {
+    try {
+      const requestUserId = this.getUserIdFromRequest(req);
+      this.logger.log(`Muting user ${userId} in chat ${chatId} by user ${requestUserId}`);
+
+      return await this.messengerService.muteParticipant(
+        BigInt(chatId),
+        BigInt(userId),
+        requestUserId,
+        muteParticipantDto.mutedUntil,
+      );
+    } catch (error) {
+      this.logger.error(`Error muting user ${userId} in chat ${chatId}`, error.stack);
+      throw error;
+    }
+  }
+
+  @Delete('chats/:chatId/participants/:userId/mute')
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({
+    summary: 'Unmute participant',
+    description: 'Remove mute from a participant in the chat',
+  })
+  @ApiParam({ name: 'chatId', description: 'Chat ID', type: 'string' })
+  @ApiParam({ name: 'userId', description: 'User ID to unmute', type: 'string' })
+  @ApiResponse({ status: 200, description: 'Participant unmuted successfully' })
+  @ApiResponse({ status: 403, description: 'No permission to unmute participants' })
+  async unmuteParticipant(
+    @Param('chatId', ParseIntPipe) chatId: number,
+    @Param('userId', ParseIntPipe) userId: number,
+    @Request() req: UserRequest,
+  ) {
+    try {
+      const requestUserId = this.getUserIdFromRequest(req);
+      this.logger.log(`Unmuting user ${userId} in chat ${chatId} by user ${requestUserId}`);
+
+      return await this.messengerService.unmuteParticipant(
+        BigInt(chatId),
+        BigInt(userId),
+        requestUserId,
+      );
+    } catch (error) {
+      this.logger.error(`Error unmuting user ${userId} in chat ${chatId}`, error.stack);
+      throw error;
+    }
+  }
+
+  @Get('chats/search')
+  @ApiOperation({
+    summary: 'Search chats',
+    description: 'Search chats by title, description, or other criteria',
+  })
+  @ApiResponse({ status: 200, description: 'Chats found successfully' })
+  async searchChats(@Query() searchChatsDto: SearchChatsDto, @Request() req: UserRequest) {
+    try {
+      const userId = this.getUserIdFromRequest(req);
+      this.logger.log(
+        `Searching chats for user ${userId} with query: ${searchChatsDto.searchQuery || 'all'}`,
+      );
+
+      return await this.messengerService.searchChats(userId, searchChatsDto.searchQuery || '', {
+        chatType: searchChatsDto.chatType,
+        limit: searchChatsDto.limit,
+        offset: searchChatsDto.offset,
+      });
+    } catch (error) {
+      this.logger.error(`Error searching chats`, error.stack);
+      throw error;
+    }
+  }
+
+  @Get('chats/:chatId/statistics')
+  @ApiOperation({
+    summary: 'Get chat statistics',
+    description: 'Get detailed statistics for a specific chat',
+  })
+  @ApiParam({ name: 'chatId', description: 'Chat ID', type: 'string' })
+  @ApiResponse({ status: 200, description: 'Chat statistics retrieved successfully' })
+  @ApiResponse({ status: 403, description: 'No access to this chat' })
+  async getChatStatistics(
+    @Param('chatId', ParseIntPipe) chatId: number,
+    @Request() req: UserRequest,
+  ) {
+    try {
+      const userId = this.getUserIdFromRequest(req);
+      this.logger.log(`Getting statistics for chat ${chatId} by user ${userId}`);
+
+      return await this.messengerService.getChatStatistics(BigInt(chatId), userId);
+    } catch (error) {
+      this.logger.error(`Error getting statistics for chat ${chatId}`, error.stack);
+      throw error;
+    }
+  }
+
+  @Post('chats/:chatId/messages/read')
+  @ApiOperation({
+    summary: 'Mark messages as read',
+    description: 'Mark messages in chat as read up to a specific message',
+  })
+  @ApiParam({ name: 'chatId', description: 'Chat ID', type: 'string' })
+  @ApiResponse({ status: 200, description: 'Messages marked as read successfully' })
+  @ApiResponse({ status: 403, description: 'No access to this chat' })
+  async markMessagesAsRead(
+    @Param('chatId', ParseIntPipe) chatId: number,
+    @Body(ValidationPipe) markMessagesReadDto: MarkMessagesReadDto,
+    @Request() req: UserRequest,
+  ) {
+    try {
+      const userId = this.getUserIdFromRequest(req);
+      this.logger.log(
+        `Marking messages as read in chat ${chatId} up to message ${markMessagesReadDto.upToMessageId} by user ${userId}`,
+      );
+
+      return await this.messengerService.markMessagesAsRead(
+        BigInt(chatId),
+        userId,
+        markMessagesReadDto.upToMessageId,
+      );
+    } catch (error) {
+      this.logger.error(`Error marking messages as read in chat ${chatId}`, error.stack);
+      throw error;
+    }
+  }
+
+  @Get('users/:userId/statistics')
+  @ApiOperation({
+    summary: 'Get user chat statistics',
+    description: 'Get detailed chat statistics for a specific user',
+  })
+  @ApiParam({ name: 'userId', description: 'User ID', type: 'string' })
+  @ApiResponse({ status: 200, description: 'User statistics retrieved successfully' })
+  @ApiResponse({ status: 403, description: 'No permission to view user statistics' })
+  async getUserStatistics(
+    @Param('userId', ParseIntPipe) userId: number,
+    @Request() req: UserRequest,
+  ) {
+    try {
+      const requesterId = this.getUserIdFromRequest(req);
+      this.logger.log(`Getting statistics for user ${userId} by requester ${requesterId}`);
+
+      return await this.messengerService.getUserStatistics(BigInt(userId), requesterId);
+    } catch (error) {
+      this.logger.error(`Error getting statistics for user ${userId}`, error.stack);
       throw error;
     }
   }

@@ -539,6 +539,59 @@ exports.Prisma.ContentTagScalarFieldEnum = {
   tagId: 'tagId'
 };
 
+exports.Prisma.ForumScalarFieldEnum = {
+  id: 'id',
+  name: 'name',
+  slug: 'slug',
+  description: 'description',
+  createdAt: 'createdAt',
+  updatedAt: 'updatedAt',
+  ownerId: 'ownerId'
+};
+
+exports.Prisma.ForumCategoryScalarFieldEnum = {
+  id: 'id',
+  forumId: 'forumId',
+  name: 'name',
+  slug: 'slug',
+  description: 'description',
+  createdAt: 'createdAt',
+  updatedAt: 'updatedAt'
+};
+
+exports.Prisma.ForumPostScalarFieldEnum = {
+  id: 'id',
+  forumId: 'forumId',
+  categoryId: 'categoryId',
+  authorId: 'authorId',
+  title: 'title',
+  content: 'content',
+  slug: 'slug',
+  createdAt: 'createdAt',
+  updatedAt: 'updatedAt'
+};
+
+exports.Prisma.ForumReplyScalarFieldEnum = {
+  id: 'id',
+  postId: 'postId',
+  authorId: 'authorId',
+  content: 'content',
+  createdAt: 'createdAt',
+  updatedAt: 'updatedAt'
+};
+
+exports.Prisma.ForumTagScalarFieldEnum = {
+  id: 'id',
+  name: 'name',
+  createdAt: 'createdAt'
+};
+
+exports.Prisma.ForumPostTagScalarFieldEnum = {
+  id: 'id',
+  postId: 'postId',
+  tagId: 'tagId'
+};
+
 exports.Prisma.SubscriptionScalarFieldEnum = {
   id: 'id',
   subscriberId: 'subscriberId',
@@ -587,186 +640,6 @@ exports.Prisma.NotificationScalarFieldEnum = {
   flags: 'flags',
   createdAt: 'createdAt',
   readAt: 'readAt'
-};
-
-exports.Prisma.ForumScalarFieldEnum = {
-  id: 'id',
-  name: 'name',
-  slug: 'slug',
-  description: 'description',
-  logoUrl: 'logoUrl',
-  bannerUrl: 'bannerUrl',
-  flags: 'flags',
-  settings: 'settings',
-  categoriesCount: 'categoriesCount',
-  postsCount: 'postsCount',
-  topicsCount: 'topicsCount',
-  repliesCount: 'repliesCount',
-  usersCount: 'usersCount',
-  lastPostAt: 'lastPostAt',
-  lastPostId: 'lastPostId',
-  lastActivityAt: 'lastActivityAt',
-  ownerId: 'ownerId',
-  createdAt: 'createdAt',
-  updatedAt: 'updatedAt'
-};
-
-exports.Prisma.ForumModeratorScalarFieldEnum = {
-  id: 'id',
-  forumId: 'forumId',
-  userId: 'userId',
-  permissions: 'permissions',
-  assignedBy: 'assignedBy',
-  assignedAt: 'assignedAt',
-  expiresAt: 'expiresAt',
-  isActive: 'isActive'
-};
-
-exports.Prisma.ForumCategoryModeratorScalarFieldEnum = {
-  id: 'id',
-  categoryId: 'categoryId',
-  userId: 'userId',
-  permissions: 'permissions',
-  assignedBy: 'assignedBy',
-  assignedAt: 'assignedAt',
-  expiresAt: 'expiresAt',
-  isActive: 'isActive'
-};
-
-exports.Prisma.ForumConfigurationScalarFieldEnum = {
-  id: 'id',
-  forumId: 'forumId',
-  key: 'key',
-  value: 'value',
-  type: 'type',
-  description: 'description',
-  isPublic: 'isPublic',
-  createdAt: 'createdAt',
-  updatedAt: 'updatedAt'
-};
-
-exports.Prisma.ForumTopicTrackerScalarFieldEnum = {
-  id: 'id',
-  userId: 'userId',
-  postId: 'postId',
-  lastRead: 'lastRead',
-  readCount: 'readCount'
-};
-
-exports.Prisma.ForumCategoryScalarFieldEnum = {
-  id: 'id',
-  forumId: 'forumId',
-  name: 'name',
-  slug: 'slug',
-  description: 'description',
-  color: 'color',
-  icon: 'icon',
-  position: 'position',
-  parentId: 'parentId',
-  level: 'level',
-  flags: 'flags',
-  postsCount: 'postsCount',
-  repliesCount: 'repliesCount',
-  topicsCount: 'topicsCount',
-  createdAt: 'createdAt',
-  updatedAt: 'updatedAt'
-};
-
-exports.Prisma.ForumCategoryPermissionScalarFieldEnum = {
-  id: 'id',
-  categoryId: 'categoryId',
-  roleId: 'roleId',
-  permissions: 'permissions',
-  createdAt: 'createdAt'
-};
-
-exports.Prisma.ForumPostScalarFieldEnum = {
-  id: 'id',
-  categoryId: 'categoryId',
-  authorId: 'authorId',
-  title: 'title',
-  content: 'content',
-  slug: 'slug',
-  flags: 'flags',
-  viewsCount: 'viewsCount',
-  repliesCount: 'repliesCount',
-  likesCount: 'likesCount',
-  dislikesCount: 'dislikesCount',
-  createdAt: 'createdAt',
-  updatedAt: 'updatedAt',
-  lastReplyAt: 'lastReplyAt',
-  lastReplyBy: 'lastReplyBy'
-};
-
-exports.Prisma.ForumReplyScalarFieldEnum = {
-  id: 'id',
-  postId: 'postId',
-  authorId: 'authorId',
-  content: 'content',
-  parentId: 'parentId',
-  flags: 'flags',
-  likesCount: 'likesCount',
-  dislikesCount: 'dislikesCount',
-  createdAt: 'createdAt',
-  updatedAt: 'updatedAt'
-};
-
-exports.Prisma.ForumVoteScalarFieldEnum = {
-  id: 'id',
-  userId: 'userId',
-  postId: 'postId',
-  replyId: 'replyId',
-  value: 'value',
-  createdAt: 'createdAt'
-};
-
-exports.Prisma.ForumSubscriptionScalarFieldEnum = {
-  id: 'id',
-  userId: 'userId',
-  postId: 'postId',
-  flags: 'flags',
-  createdAt: 'createdAt'
-};
-
-exports.Prisma.ForumTagScalarFieldEnum = {
-  id: 'id',
-  name: 'name',
-  description: 'description',
-  color: 'color',
-  usageCount: 'usageCount',
-  flags: 'flags',
-  createdAt: 'createdAt'
-};
-
-exports.Prisma.ForumPostTagScalarFieldEnum = {
-  id: 'id',
-  postId: 'postId',
-  tagId: 'tagId'
-};
-
-exports.Prisma.ForumAttachmentScalarFieldEnum = {
-  id: 'id',
-  postId: 'postId',
-  replyId: 'replyId',
-  fileName: 'fileName',
-  originalName: 'originalName',
-  mimeType: 'mimeType',
-  fileSize: 'fileSize',
-  url: 'url',
-  thumbnailUrl: 'thumbnailUrl',
-  createdAt: 'createdAt'
-};
-
-exports.Prisma.ForumModerationLogScalarFieldEnum = {
-  id: 'id',
-  moderatorId: 'moderatorId',
-  targetUserId: 'targetUserId',
-  postId: 'postId',
-  replyId: 'replyId',
-  action: 'action',
-  reason: 'reason',
-  metadata: 'metadata',
-  createdAt: 'createdAt'
 };
 
 exports.Prisma.ReportScalarFieldEnum = {
@@ -854,80 +727,6 @@ exports.Prisma.NotificationSettingsScalarFieldEnum = {
   flags: 'flags',
   createdAt: 'createdAt',
   updatedAt: 'updatedAt'
-};
-
-exports.Prisma.ForumPostSEOScalarFieldEnum = {
-  id: 'id',
-  postId: 'postId',
-  metaTitle: 'metaTitle',
-  metaDesc: 'metaDesc',
-  keywords: 'keywords',
-  canonicalUrl: 'canonicalUrl',
-  ogImage: 'ogImage',
-  schema: 'schema',
-  createdAt: 'createdAt',
-  updatedAt: 'updatedAt'
-};
-
-exports.Prisma.ForumReputationScalarFieldEnum = {
-  id: 'id',
-  userId: 'userId',
-  points: 'points',
-  level: 'level',
-  badges: 'badges',
-  postsCreated: 'postsCreated',
-  repliesCreated: 'repliesCreated',
-  likesReceived: 'likesReceived',
-  likesGiven: 'likesGiven',
-  bestAnswers: 'bestAnswers',
-  moderationScore: 'moderationScore',
-  lastCalculated: 'lastCalculated'
-};
-
-exports.Prisma.ForumHotTopicsScalarFieldEnum = {
-  id: 'id',
-  postId: 'postId',
-  score: 'score',
-  position: 'position',
-  period: 'period',
-  region: 'region',
-  calculatedAt: 'calculatedAt',
-  expiresAt: 'expiresAt'
-};
-
-exports.Prisma.ForumAnalyticsScalarFieldEnum = {
-  id: 'id',
-  date: 'date',
-  forumId: 'forumId',
-  categoryId: 'categoryId',
-  newPosts: 'newPosts',
-  newReplies: 'newReplies',
-  newUsers: 'newUsers',
-  totalViews: 'totalViews',
-  uniqueVisitors: 'uniqueVisitors',
-  avgSessionTime: 'avgSessionTime',
-  likesGiven: 'likesGiven',
-  sharesCount: 'sharesCount',
-  searchQueries: 'searchQueries',
-  reportsCreated: 'reportsCreated',
-  actionsPerformed: 'actionsPerformed'
-};
-
-exports.Prisma.ForumNotificationQueueScalarFieldEnum = {
-  id: 'id',
-  userId: 'userId',
-  type: 'type',
-  entityType: 'entityType',
-  entityId: 'entityId',
-  isRead: 'isRead',
-  isEmail: 'isEmail',
-  isPush: 'isPush',
-  title: 'title',
-  message: 'message',
-  data: 'data',
-  createdAt: 'createdAt',
-  sentAt: 'sentAt',
-  readAt: 'readAt'
 };
 
 exports.Prisma.ChatStatsCacheScalarFieldEnum = {
@@ -1180,38 +979,16 @@ exports.Prisma.TagOrderByRelevanceFieldEnum = {
   description: 'description'
 };
 
-exports.Prisma.PlaylistOrderByRelevanceFieldEnum = {
-  title: 'title',
-  description: 'description',
-  thumbnailUrl: 'thumbnailUrl'
-};
-
-exports.Prisma.NotificationOrderByRelevanceFieldEnum = {
-  title: 'title',
-  message: 'message'
-};
-
 exports.Prisma.ForumOrderByRelevanceFieldEnum = {
   name: 'name',
   slug: 'slug',
-  description: 'description',
-  logoUrl: 'logoUrl',
-  bannerUrl: 'bannerUrl'
-};
-
-exports.Prisma.ForumConfigurationOrderByRelevanceFieldEnum = {
-  key: 'key',
-  value: 'value',
-  type: 'type',
   description: 'description'
 };
 
 exports.Prisma.ForumCategoryOrderByRelevanceFieldEnum = {
   name: 'name',
   slug: 'slug',
-  description: 'description',
-  color: 'color',
-  icon: 'icon'
+  description: 'description'
 };
 
 exports.Prisma.ForumPostOrderByRelevanceFieldEnum = {
@@ -1225,21 +1002,18 @@ exports.Prisma.ForumReplyOrderByRelevanceFieldEnum = {
 };
 
 exports.Prisma.ForumTagOrderByRelevanceFieldEnum = {
-  name: 'name',
-  description: 'description',
-  color: 'color'
+  name: 'name'
 };
 
-exports.Prisma.ForumAttachmentOrderByRelevanceFieldEnum = {
-  fileName: 'fileName',
-  originalName: 'originalName',
-  mimeType: 'mimeType',
-  url: 'url',
+exports.Prisma.PlaylistOrderByRelevanceFieldEnum = {
+  title: 'title',
+  description: 'description',
   thumbnailUrl: 'thumbnailUrl'
 };
 
-exports.Prisma.ForumModerationLogOrderByRelevanceFieldEnum = {
-  reason: 'reason'
+exports.Prisma.NotificationOrderByRelevanceFieldEnum = {
+  title: 'title',
+  message: 'message'
 };
 
 exports.Prisma.ReportOrderByRelevanceFieldEnum = {
@@ -1266,26 +1040,6 @@ exports.Prisma.ContactListOrderByRelevanceFieldEnum = {
 
 exports.Prisma.NotificationSettingsOrderByRelevanceFieldEnum = {
   notificationType: 'notificationType'
-};
-
-exports.Prisma.ForumPostSEOOrderByRelevanceFieldEnum = {
-  metaTitle: 'metaTitle',
-  metaDesc: 'metaDesc',
-  keywords: 'keywords',
-  canonicalUrl: 'canonicalUrl',
-  ogImage: 'ogImage'
-};
-
-exports.Prisma.ForumHotTopicsOrderByRelevanceFieldEnum = {
-  period: 'period',
-  region: 'region'
-};
-
-exports.Prisma.ForumNotificationQueueOrderByRelevanceFieldEnum = {
-  type: 'type',
-  entityType: 'entityType',
-  title: 'title',
-  message: 'message'
 };
 
 exports.Prisma.MessageArchiveOrderByRelevanceFieldEnum = {
@@ -1387,23 +1141,6 @@ exports.NotificationType = exports.$Enums.NotificationType = {
   COMMUNITY_POST: 'COMMUNITY_POST'
 };
 
-exports.ModerationAction = exports.$Enums.ModerationAction = {
-  NONE: 'NONE',
-  MOVE: 'MOVE',
-  WARN: 'WARN',
-  PIN: 'PIN',
-  UNPIN: 'UNPIN',
-  FEATURE: 'FEATURE',
-  UNFEATURE: 'UNFEATURE',
-  LOCK: 'LOCK',
-  UNLOCK: 'UNLOCK',
-  TIMEOUT: 'TIMEOUT',
-  DELETE: 'DELETE',
-  SUSPEND_USER: 'SUSPEND_USER',
-  BAN_USER: 'BAN_USER',
-  SHADOWBAN: 'SHADOWBAN'
-};
-
 exports.ReportReason = exports.$Enums.ReportReason = {
   SPAM: 'SPAM',
   HARASSMENT: 'HARASSMENT',
@@ -1426,6 +1163,23 @@ exports.ReportStatus = exports.$Enums.ReportStatus = {
   RESOLVED: 'RESOLVED',
   DISMISSED: 'DISMISSED',
   ESCALATED: 'ESCALATED'
+};
+
+exports.ModerationAction = exports.$Enums.ModerationAction = {
+  NONE: 'NONE',
+  MOVE: 'MOVE',
+  WARN: 'WARN',
+  PIN: 'PIN',
+  UNPIN: 'UNPIN',
+  FEATURE: 'FEATURE',
+  UNFEATURE: 'UNFEATURE',
+  LOCK: 'LOCK',
+  UNLOCK: 'UNLOCK',
+  TIMEOUT: 'TIMEOUT',
+  DELETE: 'DELETE',
+  SUSPEND_USER: 'SUSPEND_USER',
+  BAN_USER: 'BAN_USER',
+  SHADOWBAN: 'SHADOWBAN'
 };
 
 exports.Prisma.ModelName = {
@@ -1464,26 +1218,17 @@ exports.Prisma.ModelName = {
   Like: 'Like',
   Tag: 'Tag',
   ContentTag: 'ContentTag',
+  Forum: 'Forum',
+  ForumCategory: 'ForumCategory',
+  ForumPost: 'ForumPost',
+  ForumReply: 'ForumReply',
+  ForumTag: 'ForumTag',
+  ForumPostTag: 'ForumPostTag',
   Subscription: 'Subscription',
   Playlist: 'Playlist',
   PlaylistItem: 'PlaylistItem',
   WatchHistory: 'WatchHistory',
   Notification: 'Notification',
-  Forum: 'Forum',
-  ForumModerator: 'ForumModerator',
-  ForumCategoryModerator: 'ForumCategoryModerator',
-  ForumConfiguration: 'ForumConfiguration',
-  ForumTopicTracker: 'ForumTopicTracker',
-  ForumCategory: 'ForumCategory',
-  ForumCategoryPermission: 'ForumCategoryPermission',
-  ForumPost: 'ForumPost',
-  ForumReply: 'ForumReply',
-  ForumVote: 'ForumVote',
-  ForumSubscription: 'ForumSubscription',
-  ForumTag: 'ForumTag',
-  ForumPostTag: 'ForumPostTag',
-  ForumAttachment: 'ForumAttachment',
-  ForumModerationLog: 'ForumModerationLog',
   Report: 'Report',
   RefreshToken: 'RefreshToken',
   RefreshTokenBlacklist: 'RefreshTokenBlacklist',
@@ -1491,11 +1236,6 @@ exports.Prisma.ModelName = {
   UserSettings: 'UserSettings',
   ChatSettings: 'ChatSettings',
   NotificationSettings: 'NotificationSettings',
-  ForumPostSEO: 'ForumPostSEO',
-  ForumReputation: 'ForumReputation',
-  ForumHotTopics: 'ForumHotTopics',
-  ForumAnalytics: 'ForumAnalytics',
-  ForumNotificationQueue: 'ForumNotificationQueue',
   ChatStatsCache: 'ChatStatsCache',
   UserStatsCache: 'UserStatsCache',
   ContentStatsCache: 'ContentStatsCache',
