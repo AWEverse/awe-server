@@ -25,7 +25,6 @@ import {
 } from '../dto/realtime.dto';
 import { MessageType } from '../types';
 import { JwtService } from '@nestjs/jwt';
-import * as jwt from 'jsonwebtoken';
 import { PrismaService } from '../../../libs/db/prisma.service';
 import { WEBSOCKET_CONFIG } from './websocket.config';
 import { WebSocketRateLimiter } from './websocket-rate-limiter.service';
@@ -79,6 +78,7 @@ export class MessangerGateway implements OnGatewayInit, OnGatewayConnection, OnG
   // Timers for cleanup and broadcasting
   private cleanupInterval: NodeJS.Timeout;
   private typingCleanupInterval: NodeJS.Timeout;
+
   constructor(
     private readonly messengerService: MessangerService,
     private readonly jwtService: JwtService,
@@ -87,6 +87,7 @@ export class MessangerGateway implements OnGatewayInit, OnGatewayConnection, OnG
     private readonly configService: ConfigService,
     private readonly prisma: PrismaService,
   ) {}
+
   afterInit(_server: Server) {
     this.logger.log('WebSocket Gateway initialized with optimizations');
 
@@ -103,60 +104,25 @@ export class MessangerGateway implements OnGatewayInit, OnGatewayConnection, OnG
     // Start monitoring
     this.monitor.startPeriodicLogging();
   }
-  async handleConnection(client: AuthenticatedSocket) {
+  async handleConnection(client: Socket) {
     try {
-      // Debug: Log authentication data received
-      this.logger.debug('Connection attempt from:', {
+      this.logger.log('New WebSocket connection:', {
         socketId: client.id,
-        authHeader: client.handshake.headers.authorization ? 'present' : 'missing',
-        queryToken: client.handshake.query.token ? 'present' : 'missing',
-        authObject: client.handshake.auth ? 'present' : 'missing',
-        authTokenInObject: client.handshake.auth?.token ? 'present' : 'missing',
+        clientIP: client.handshake.address,
+        userAgent: client.handshake.headers['user-agent']?.substring(0, 100),
       });
-
-      const token = this.extractTokenFromHandshake(client);
-
-      if (!token) {
-        this.logger.warn('Connection attempt without authentication token');
-        this.logger.debug('Handshake data:', {
-          headers: Object.keys(client.handshake.headers),
-          query: Object.keys(client.handshake.query),
-          auth: client.handshake.auth,
-        });
-        client.emit('error', { message: 'Authentication required' });
-        client.disconnect();
-        return;
-      }
-
-      const userInfo = await this.validateTokenAndGetUser(token);
-      if (!userInfo) {
-        this.logger.warn('Connection attempt with invalid token');
-        client.emit('error', { message: 'Invalid or expired token' });
-        client.disconnect();
-        return;
-      } // Attach user info to socket (using database user ID, not supabaseId)
-      client.userId = userInfo.id;
-      client.username = userInfo.username || userInfo.email;
-      client.user = userInfo; // Add this for WsJwtGuard compatibility
-
-      // Register user connection efficiently
-      this.registerUserConnection(client);
 
       // Update metrics
-      this.monitor.updateConnectionCount(this.connectionPool.connectedUsers.size);
-      this.monitor.updateActiveUsers(this.connectionPool.userSockets.size);
+      this.monitor.updateConnectionCount(this.connectionPool.connectedUsers.size + 1);
 
-      this.logger.log(`User ${client.username} (${client.userId}) connected from ${client.id}`);
-
-      // Send connection confirmation
-      client.emit('connected', {
-        message: 'Connected to messenger',
-        userId: client.userId.toString(),
+      // Connection is successful, authentication will be handled by guards on message events
+      client.emit('connection_established', {
         socketId: client.id,
+        message: 'Connected to messenger. Send authenticated messages to start.',
       });
 
-      // Auto-join user to their active chats (optimized)
-      await this.autoJoinUserChats(client);
+      // Set up periodic token validation check
+      this.setupTokenValidationCheck(client);
     } catch (error) {
       this.logger.error('Connection error:', error);
       client.emit('error', { message: 'Connection failed' });
@@ -164,15 +130,20 @@ export class MessangerGateway implements OnGatewayInit, OnGatewayConnection, OnG
     }
   }
 
-  async handleDisconnect(client: AuthenticatedSocket) {
-    if (client.userId) {
-      this.unregisterUserConnection(client);
+  async handleDisconnect(client: Socket) {
+    const authenticatedClient = client as AuthenticatedSocket;
+    if (authenticatedClient.userId) {
+      this.unregisterUserConnection(authenticatedClient);
 
       // Update metrics
       this.monitor.updateConnectionCount(this.connectionPool.connectedUsers.size);
       this.monitor.updateActiveUsers(this.connectionPool.userSockets.size);
 
-      this.logger.log(`User ${client.username} (${client.userId}) disconnected from ${client.id}`);
+      this.logger.log(
+        `User ${authenticatedClient.username} (${authenticatedClient.userId}) disconnected from ${client.id}`,
+      );
+    } else {
+      this.logger.log(`Unauthenticated client disconnected: ${client.id}`);
     }
   }
 
@@ -183,12 +154,44 @@ export class MessangerGateway implements OnGatewayInit, OnGatewayConnection, OnG
     @MessageBody() data: { message: string },
   ) {
     try {
+      // Register user connection if first authenticated message
+      this.ensureUserRegistered(client);
+
       this.logger.log(`Test connection from ${client.username}: ${data.message}`);
       client.emit('test_response', { message: 'Connection successful', data });
       return { success: true, message: 'Connection test passed' };
     } catch (error) {
       this.logger.error('Error in test_connection:', error);
       throw new WsException('Test connection failed');
+    }
+  }
+
+  @SubscribeMessage('ping')
+  @UseGuards(WsJwtGuard)
+  async handlePing(
+    @ConnectedSocket() client: AuthenticatedSocket,
+    @MessageBody() data: { timestamp: number },
+  ) {
+    try {
+      // Register user connection if first authenticated message
+      this.ensureUserRegistered(client);
+
+      // Update last activity for connection pool
+      const userInfo = this.connectionPool.connectedUsers.get(client.id);
+      if (userInfo) {
+        userInfo.lastActivity = Date.now();
+      }
+
+      // Send pong response
+      client.emit('pong', {
+        timestamp: data.timestamp,
+        serverTimestamp: Date.now(),
+      });
+
+      return { success: true, timestamp: Date.now() };
+    } catch (error) {
+      this.logger.error('Error in ping handler:', error);
+      throw new WsException('Ping failed');
     }
   }
 
@@ -203,6 +206,9 @@ export class MessangerGateway implements OnGatewayInit, OnGatewayConnection, OnG
     @MessageBody() data: SendMessageDto,
   ) {
     try {
+      // Register user connection if first authenticated message
+      this.ensureUserRegistered(client);
+
       // Check rate limit
       if (!this.rateLimiter.checkLimit(client.userId.toString(), 'message')) {
         this.monitor.incrementRateLimitViolation();
@@ -276,6 +282,9 @@ export class MessangerGateway implements OnGatewayInit, OnGatewayConnection, OnG
     @MessageBody() data: EditMessageDto,
   ) {
     try {
+      // Register user connection if first authenticated message
+      this.ensureUserRegistered(client);
+
       const { messageId, content } = data;
       const result = await this.messengerService.editMessage(
         BigInt(messageId),
@@ -307,6 +316,9 @@ export class MessangerGateway implements OnGatewayInit, OnGatewayConnection, OnG
     @MessageBody() data: { messageId: string; forEveryone?: boolean },
   ) {
     try {
+      // Register user connection if first authenticated message
+      this.ensureUserRegistered(client);
+
       const { messageId, forEveryone = false } = data;
       const message = await this.messengerService.getMessageById(BigInt(messageId));
 
@@ -344,6 +356,9 @@ export class MessangerGateway implements OnGatewayInit, OnGatewayConnection, OnG
     @MessageBody() data: JoinChatDto,
   ) {
     try {
+      // Register user connection if first authenticated message
+      this.ensureUserRegistered(client);
+
       const { chatId } = data;
       const roomName = `chat_${chatId}`;
 
@@ -377,6 +392,9 @@ export class MessangerGateway implements OnGatewayInit, OnGatewayConnection, OnG
     @MessageBody() data: LeaveChatDto,
   ) {
     try {
+      // Register user connection if first authenticated message
+      this.ensureUserRegistered(client);
+
       const { chatId } = data;
       const roomName = `chat_${chatId}`;
 
@@ -408,6 +426,9 @@ export class MessangerGateway implements OnGatewayInit, OnGatewayConnection, OnG
     @ConnectedSocket() client: AuthenticatedSocket,
     @MessageBody() data: TypingIndicatorDto,
   ) {
+    // Register user connection if first authenticated message
+    this.ensureUserRegistered(client);
+
     // Check rate limit
     if (!this.rateLimiter.checkLimit(client.userId.toString(), 'typing')) {
       return; // Silently ignore if rate limited
@@ -428,7 +449,9 @@ export class MessangerGateway implements OnGatewayInit, OnGatewayConnection, OnG
       userId: userIdStr,
       username: client.username,
       isTyping: true,
-    }); // Auto-cleanup typing after configured timeout
+    });
+
+    // Auto-cleanup typing after configured timeout
     setTimeout(() => {
       const typingSet = this.connectionPool.typingUsers.get(chatId);
       if (typingSet) {
@@ -446,6 +469,9 @@ export class MessangerGateway implements OnGatewayInit, OnGatewayConnection, OnG
     @ConnectedSocket() client: AuthenticatedSocket,
     @MessageBody() data: TypingIndicatorDto,
   ) {
+    // Register user connection if first authenticated message
+    this.ensureUserRegistered(client);
+
     const { chatId } = data;
     const userIdStr = client.userId.toString();
 
@@ -478,6 +504,9 @@ export class MessangerGateway implements OnGatewayInit, OnGatewayConnection, OnG
     @MessageBody() data: MessageReactionDto,
   ) {
     try {
+      // Register user connection if first authenticated message
+      this.ensureUserRegistered(client);
+
       // Check rate limit
       if (!this.rateLimiter.checkLimit(client.userId.toString(), 'reaction')) {
         throw new Error('Reaction rate limit exceeded');
@@ -515,6 +544,9 @@ export class MessangerGateway implements OnGatewayInit, OnGatewayConnection, OnG
     @MessageBody() data: MessageReactionDto,
   ) {
     try {
+      // Register user connection if first authenticated message
+      this.ensureUserRegistered(client);
+
       const { messageId, emoji } = data;
       const result = await this.messengerService.removeReaction(
         BigInt(messageId),
@@ -540,9 +572,62 @@ export class MessangerGateway implements OnGatewayInit, OnGatewayConnection, OnG
   }
 
   // ===============================================
-  // HELPER METHODS (OPTIMIZED)
+  // TOKEN VALIDATION AND ERROR HANDLING
   // ===============================================
-  private extractTokenFromHandshake(client: Socket): string | null {
+
+  private setupTokenValidationCheck(client: Socket) {
+    // Проверяем токен каждые 5 минут для аутентифицированных пользователей
+    const validationInterval = setInterval(
+      () => {
+        const authenticatedClient = client as AuthenticatedSocket;
+        if (authenticatedClient.userId) {
+          this.validateUserToken(authenticatedClient);
+        }
+      },
+      5 * 60 * 1000,
+    ); // 5 минут
+
+    // Очищаем интервал при отключении
+    client.on('disconnect', () => {
+      clearInterval(validationInterval);
+    });
+  }
+
+  private async validateUserToken(client: AuthenticatedSocket) {
+    try {
+      const token = this.extractTokenFromClient(client);
+      if (!token) {
+        this.handleTokenError(client, 'no_token', 'Token not found');
+        return;
+      }
+
+      const supabaseJwtSecret = this.configService.get<string>('SUPABASE_JWT_SECRET');
+      if (!supabaseJwtSecret) {
+        return; // Skip validation if secret not configured
+      }
+
+      // Проверяем токен
+      const payload = this.jwtService.verify(token, { secret: supabaseJwtSecret });
+
+      // Проверяем, что пользователь все еще существует
+      const user = await this.prisma.user.findUnique({
+        where: { supabaseId: payload.sub },
+        select: { id: true, username: true, email: true },
+      });
+
+      if (!user) {
+        this.handleTokenError(client, 'user_not_found', 'User account no longer exists');
+      }
+    } catch (error) {
+      if (error.name === 'TokenExpiredError') {
+        this.handleTokenError(client, 'token_expired', 'Token expired during session');
+      } else if (error.name === 'JsonWebTokenError') {
+        this.handleTokenError(client, 'invalid_token', 'Token became invalid');
+      }
+    }
+  }
+
+  private extractTokenFromClient(client: Socket): string | null {
     // Check authorization header first
     const authHeader = client.handshake.headers.authorization;
     if (authHeader && authHeader.startsWith('Bearer ')) {
@@ -555,7 +640,7 @@ export class MessangerGateway implements OnGatewayInit, OnGatewayConnection, OnG
       return queryToken;
     }
 
-    // Check auth object (sent by socket.io client auth option)
+    // Check auth object
     const authToken = client.handshake.auth?.token;
     if (typeof authToken === 'string') {
       return authToken;
@@ -564,58 +649,44 @@ export class MessangerGateway implements OnGatewayInit, OnGatewayConnection, OnG
     return null;
   }
 
-  private async validateTokenAndGetUser(token: string) {
-    try {
-      const supabaseJwtSecret = this.configService.get<string>('SUPABASE_JWT_SECRET');
-      if (!supabaseJwtSecret) {
-        this.logger.error('SUPABASE_JWT_SECRET is not configured');
-        return null;
-      }
+  private handleTokenError(client: AuthenticatedSocket, type: string, message: string) {
+    this.logger.warn(`Token error for user ${client.username}: ${message}`);
 
-      // Verify token with Supabase JWT secret
-      const payload = jwt.verify(token, supabaseJwtSecret) as { sub: string; email?: string };
+    // Уведомляем клиента об ошибке
+    client.emit('auth_error', {
+      type,
+      message,
+      shouldReconnect: type === 'token_expired',
+      timestamp: new Date().toISOString(),
+    });
 
-      if (!payload.sub) {
-        this.logger.warn('Token payload missing sub claim');
-        return null;
-      }
+    // Для критических ошибок отключаем пользователя
+    if (type === 'token_expired' || type === 'user_not_found' || type === 'invalid_token') {
+      setTimeout(() => {
+        client.emit('force_disconnect', {
+          reason: type,
+          message: 'Please refresh your session and reconnect',
+        });
+        client.disconnect(true);
+      }, 2000); // Даем время на получение уведомления
+    }
+  }
 
-      // Check if user exists in database
-      const user = await this.prisma.user.findUnique({
-        where: { supabaseId: payload.sub },
-        select: {
-          id: true,
-          supabaseId: true,
-          email: true,
-          username: true,
-          flags: true,
-        },
-      });
+  // ===============================================
+  // HELPER METHODS (OPTIMIZED)
+  // ===============================================
 
-      if (!user) {
-        this.logger.warn(`User not found for supabaseId: ${payload.sub}`);
-        return null;
-      }
+  private ensureUserRegistered(client: AuthenticatedSocket) {
+    // Check if user is already registered
+    if (!this.connectionPool.connectedUsers.has(client.id)) {
+      this.registerUserConnection(client);
 
-      // Check if user is active (same logic as WsJwtGuard)
-      if (!(user.flags & 1)) {
-        this.logger.warn(`Inactive user attempted to connect: ${user.id}`);
-        return null;
-      }
+      // Auto-join user to their active chats
+      this.autoJoinUserChats(client);
 
-      return user;
-    } catch (error) {
-      this.logger.error('Token validation error:', error);
-
-      if (error.name === 'JsonWebTokenError') {
-        this.logger.warn('Invalid token format');
-      } else if (error.name === 'TokenExpiredError') {
-        this.logger.warn('Token expired');
-      } else if (error.name === 'NotBeforeError') {
-        this.logger.warn('Token not active');
-      }
-
-      return null;
+      this.logger.log(
+        `User ${client.username} (${client.userId}) registered via authenticated message`,
+      );
     }
   }
 
@@ -637,6 +708,9 @@ export class MessangerGateway implements OnGatewayInit, OnGatewayConnection, OnG
       this.connectionPool.userSockets.set(userIdStr, new Set());
     }
     this.connectionPool.userSockets.get(userIdStr)!.add(client.id);
+
+    // Update metrics
+    this.monitor.updateActiveUsers(this.connectionPool.userSockets.size);
   }
 
   private unregisterUserConnection(client: AuthenticatedSocket) {
@@ -689,6 +763,7 @@ export class MessangerGateway implements OnGatewayInit, OnGatewayConnection, OnG
     const roomName = `chat_${chatId}`;
     this.server.to(roomName).emit(event, data);
   }
+
   private cleanupStaleConnections() {
     const now = Date.now();
     const staleThreshold = WEBSOCKET_CONFIG.STALE_CONNECTION_THRESHOLD;

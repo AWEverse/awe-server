@@ -10,6 +10,9 @@ import { OptimizedCacheService } from './cache/optimized-cache.service';
 import { PerformanceInterceptor } from './interceptors/performance.interceptor';
 import { BigIntInterceptor } from './interceptors/bigint.interceptor';
 
+// Guards
+import { WsJwtGuard } from './guards/WsJwtGuard.guard';
+
 @Global()
 @Module({
   imports: [ConfigModule],
@@ -19,6 +22,7 @@ import { BigIntInterceptor } from './interceptors/bigint.interceptor';
     OptimizedCacheService,
     PerformanceInterceptor,
     BigIntInterceptor,
+    WsJwtGuard,
   ],
   exports: [
     MemoryOptimizationService,
@@ -26,6 +30,7 @@ import { BigIntInterceptor } from './interceptors/bigint.interceptor';
     OptimizedCacheService,
     PerformanceInterceptor,
     BigIntInterceptor,
+    WsJwtGuard,
   ],
 })
 export class CommonModule {}
