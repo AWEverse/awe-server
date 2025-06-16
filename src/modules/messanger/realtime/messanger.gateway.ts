@@ -10,6 +10,7 @@ import {
   WsException,
 } from '@nestjs/websockets';
 import { Logger, UseGuards, UsePipes, ValidationPipe, Injectable } from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
 import { Server, Socket } from 'socket.io';
 import { MessangerService } from '../messanger.service';
 import { WsJwtGuard } from '../../common/guards/WsJwtGuard.guard';
@@ -24,6 +25,8 @@ import {
 } from '../dto/realtime.dto';
 import { MessageType } from '../types';
 import { JwtService } from '@nestjs/jwt';
+import * as jwt from 'jsonwebtoken';
+import { PrismaService } from '../../../libs/db/prisma.service';
 import { WEBSOCKET_CONFIG } from './websocket.config';
 import { WebSocketRateLimiter } from './websocket-rate-limiter.service';
 import { WebSocketMonitor } from './websocket-monitor.service';
@@ -80,6 +83,8 @@ export class MessangerGateway implements OnGatewayInit, OnGatewayConnection, OnG
     private readonly jwtService: JwtService,
     private readonly rateLimiter: WebSocketRateLimiter,
     private readonly monitor: WebSocketMonitor,
+    private readonly configService: ConfigService,
+    private readonly prisma: PrismaService,
   ) {}
   afterInit(_server: Server) {
     this.logger.log('WebSocket Gateway initialized with optimizations');
@@ -103,21 +108,23 @@ export class MessangerGateway implements OnGatewayInit, OnGatewayConnection, OnG
       const token = this.extractTokenFromHandshake(client);
 
       if (!token) {
+        this.logger.warn('Connection attempt without authentication token');
         client.emit('error', { message: 'Authentication required' });
         client.disconnect();
         return;
       }
 
-      const payload = await this.validateToken(token);
-      if (!payload) {
-        client.emit('error', { message: 'Invalid token' });
+      const userInfo = await this.validateTokenAndGetUser(token);
+      if (!userInfo) {
+        this.logger.warn('Connection attempt with invalid token');
+        client.emit('error', { message: 'Invalid or expired token' });
         client.disconnect();
         return;
       }
 
-      // Attach user info to socket
-      client.userId = BigInt(payload.sub);
-      client.username = payload.username; // Register user connection efficiently
+      // Attach user info to socket (using database user ID, not supabaseId)
+      client.userId = userInfo.id;
+      client.username = userInfo.username || userInfo.email; // Register user connection efficiently
       this.registerUserConnection(client);
 
       // Update metrics
@@ -529,13 +536,57 @@ export class MessangerGateway implements OnGatewayInit, OnGatewayConnection, OnG
     const token = client.handshake.query.token;
     return typeof token === 'string' ? token : null;
   }
-
-  private async validateToken(token: string) {
+  private async validateTokenAndGetUser(token: string) {
     try {
-      return await this.jwtService.verifyAsync(token, {
-        secret: process.env.JWT_SECRET,
+      const supabaseJwtSecret = this.configService.get<string>('SUPABASE_JWT_SECRET');
+      if (!supabaseJwtSecret) {
+        this.logger.error('SUPABASE_JWT_SECRET is not configured');
+        return null;
+      }
+
+      // Verify token with Supabase JWT secret
+      const payload = jwt.verify(token, supabaseJwtSecret) as { sub: string; email?: string };
+
+      if (!payload.sub) {
+        this.logger.warn('Token payload missing sub claim');
+        return null;
+      }
+
+      // Check if user exists in database
+      const user = await this.prisma.user.findUnique({
+        where: { supabaseId: payload.sub },
+        select: {
+          id: true,
+          supabaseId: true,
+          email: true,
+          username: true,
+          flags: true,
+        },
       });
-    } catch {
+
+      if (!user) {
+        this.logger.warn(`User not found for supabaseId: ${payload.sub}`);
+        return null;
+      }
+
+      // Check if user is active (same logic as WsJwtGuard)
+      if (!(user.flags & 1)) {
+        this.logger.warn(`Inactive user attempted to connect: ${user.id}`);
+        return null;
+      }
+
+      return user;
+    } catch (error) {
+      this.logger.error('Token validation error:', error);
+
+      if (error.name === 'JsonWebTokenError') {
+        this.logger.warn('Invalid token format');
+      } else if (error.name === 'TokenExpiredError') {
+        this.logger.warn('Token expired');
+      } else if (error.name === 'NotBeforeError') {
+        this.logger.warn('Token not active');
+      }
+
       return null;
     }
   }
