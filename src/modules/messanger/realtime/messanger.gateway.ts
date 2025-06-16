@@ -50,8 +50,8 @@ interface ConnectionPool {
 @Injectable()
 @WebSocketGateway({
   cors: {
-    origin: process.env.FRONTEND_URL || 'http://localhost:3000',
-    credentials: true,
+    origin: "*w"
+    credentials: false,
   },
   namespace: '/messenger-realtime',
   pingTimeout: WEBSOCKET_CONFIG.PING_TIMEOUT,
