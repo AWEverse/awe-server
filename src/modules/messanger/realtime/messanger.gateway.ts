@@ -153,6 +153,22 @@ export class MessangerGateway implements OnGatewayInit, OnGatewayConnection, OnG
     }
   }
 
+  @SubscribeMessage('test_connection')
+  @UseGuards(WsJwtGuard)
+  async handleTestConnection(
+    @ConnectedSocket() client: AuthenticatedSocket,
+    @MessageBody() data: { message: string },
+  ) {
+    try {
+      this.logger.log(`Test connection from ${client.username}: ${data.message}`);
+      client.emit('test_response', { message: 'Connection successful', data });
+      return { success: true, message: 'Connection test passed' };
+    } catch (error) {
+      this.logger.error('Error in test_connection:', error);
+      throw new WsException('Test connection failed');
+    }
+  }
+
   // ===============================================
   // CORE MESSAGE HANDLING (OPTIMIZED)
   // ===============================================
