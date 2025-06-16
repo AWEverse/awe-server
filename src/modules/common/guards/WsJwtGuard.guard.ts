@@ -27,13 +27,17 @@ export class WsJwtGuard implements CanActivate {
       // Check if user is already authenticated from connection
       if (client.userId && client.user) {
         return true;
-      }
-
-      // Extract token from handshake or message
+      } // Extract token from handshake or message
       const token = this.extractToken(client);
 
       if (!token) {
         this.logger.warn('No authentication token provided');
+        this.logger.debug('Token extraction details:', {
+          authHeader: client.handshake.headers.authorization ? 'present' : 'missing',
+          queryToken: client.handshake.query.token ? 'present' : 'missing',
+          authObject: client.handshake.auth ? 'present' : 'missing',
+          authTokenInObject: client.handshake.auth?.token ? 'present' : 'missing',
+        });
         throw new WsException('Authentication token required');
       }
 
@@ -106,7 +110,6 @@ export class WsJwtGuard implements CanActivate {
       throw new WsException('Authentication failed');
     }
   }
-
   private extractToken(client: Socket): string | null {
     // Check authorization header first (preferred method)
     const authHeader = client.handshake.headers.authorization;
@@ -114,8 +117,18 @@ export class WsJwtGuard implements CanActivate {
       return authHeader.substring(7);
     }
 
-    // Fallback to query parameters
-    const token = client.handshake.query.token;
-    return typeof token === 'string' ? token : null;
+    // Check query parameter
+    const queryToken = client.handshake.query.token;
+    if (typeof queryToken === 'string') {
+      return queryToken;
+    }
+
+    // Check auth object (sent by socket.io client auth option)
+    const authToken = client.handshake.auth?.token;
+    if (typeof authToken === 'string') {
+      return authToken;
+    }
+
+    return null;
   }
 }

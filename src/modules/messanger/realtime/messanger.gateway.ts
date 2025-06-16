@@ -34,6 +34,7 @@ import { WebSocketMonitor } from './websocket-monitor.service';
 interface AuthenticatedSocket extends Socket {
   userId: bigint;
   username: string;
+  user: any;
 }
 
 interface SocketUserInfo {
@@ -133,11 +134,12 @@ export class MessangerGateway implements OnGatewayInit, OnGatewayConnection, OnG
         client.emit('error', { message: 'Invalid or expired token' });
         client.disconnect();
         return;
-      }
-
-      // Attach user info to socket (using database user ID, not supabaseId)
+      } // Attach user info to socket (using database user ID, not supabaseId)
       client.userId = userInfo.id;
-      client.username = userInfo.username || userInfo.email; // Register user connection efficiently
+      client.username = userInfo.username || userInfo.email;
+      client.user = userInfo; // Add this for WsJwtGuard compatibility
+
+      // Register user connection efficiently
       this.registerUserConnection(client);
 
       // Update metrics
