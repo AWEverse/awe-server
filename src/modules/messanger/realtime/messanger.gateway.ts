@@ -102,13 +102,26 @@ export class MessangerGateway implements OnGatewayInit, OnGatewayConnection, OnG
     // Start monitoring
     this.monitor.startPeriodicLogging();
   }
-
   async handleConnection(client: AuthenticatedSocket) {
     try {
+      // Debug: Log authentication data received
+      this.logger.debug('Connection attempt from:', {
+        socketId: client.id,
+        authHeader: client.handshake.headers.authorization ? 'present' : 'missing',
+        queryToken: client.handshake.query.token ? 'present' : 'missing',
+        authObject: client.handshake.auth ? 'present' : 'missing',
+        authTokenInObject: client.handshake.auth?.token ? 'present' : 'missing',
+      });
+
       const token = this.extractTokenFromHandshake(client);
 
       if (!token) {
         this.logger.warn('Connection attempt without authentication token');
+        this.logger.debug('Handshake data:', {
+          headers: Object.keys(client.handshake.headers),
+          query: Object.keys(client.handshake.query),
+          auth: client.handshake.auth,
+        });
         client.emit('error', { message: 'Authentication required' });
         client.disconnect();
         return;
@@ -526,16 +539,28 @@ export class MessangerGateway implements OnGatewayInit, OnGatewayConnection, OnG
   // ===============================================
   // HELPER METHODS (OPTIMIZED)
   // ===============================================
-
   private extractTokenFromHandshake(client: Socket): string | null {
+    // Check authorization header first
     const authHeader = client.handshake.headers.authorization;
     if (authHeader && authHeader.startsWith('Bearer ')) {
       return authHeader.substring(7);
     }
 
-    const token = client.handshake.query.token;
-    return typeof token === 'string' ? token : null;
+    // Check query parameter
+    const queryToken = client.handshake.query.token;
+    if (typeof queryToken === 'string') {
+      return queryToken;
+    }
+
+    // Check auth object (sent by socket.io client auth option)
+    const authToken = client.handshake.auth?.token;
+    if (typeof authToken === 'string') {
+      return authToken;
+    }
+
+    return null;
   }
+
   private async validateTokenAndGetUser(token: string) {
     try {
       const supabaseJwtSecret = this.configService.get<string>('SUPABASE_JWT_SECRET');
