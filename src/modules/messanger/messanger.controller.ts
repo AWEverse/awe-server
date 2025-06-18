@@ -57,8 +57,10 @@ import {
 import { ResponseInterceptor } from '../common/interceptors/response.interceptor';
 import { GlobalAuthGuard } from '../common/guards/global-auth.guard';
 import { UserRequest } from '../auth/types';
+import { JwtAuthGuard } from '../auth';
 
 @UseInterceptors(ResponseInterceptor)
+@UseGuards(JwtAuthGuard)
 @ApiBearerAuth('JWT-auth')
 @ApiTags('Messenger')
 @Controller('messenger')
@@ -68,8 +70,14 @@ export class MessangerController {
   constructor(private readonly messengerService: MessangerService) {}
 
   private getUserIdFromRequest(request?: any): bigint {
-    return request?.user?.id ? BigInt(request.user.id) : BigInt(2);
+    if (!request || !request.user || !request.user.id) {
+      throw new Error('User ID not found in request');
+    }
+    const userId = BigInt(request.user.id);
+    this.logger.log(`Messenger: Extracted user ID: ${userId}`);
+    return userId;
   }
+
   @Post('chats')
   @ApiOperation({
     summary: 'Create a new chat',
@@ -259,6 +267,7 @@ export class MessangerController {
       throw error;
     }
   }
+
   @Get('chats')
   @ApiOperation({
     summary: 'Get user chats',
