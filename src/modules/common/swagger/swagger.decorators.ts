@@ -12,7 +12,7 @@ import {
   getSchemaPath,
 } from '@nestjs/swagger';
 
-// Общие декораторы для успешных ответов
+// Загальні декоратори для успішних відповідей
 export const ApiSuccessResponse = (
   description: string,
   type?: Type<unknown> | Function | [Function] | string,
@@ -26,7 +26,7 @@ export const ApiSuccessResponse = (
   );
 };
 
-// Декоратор для ответов с созданием ресурса
+// Декоратор для відповідей зі створенням ресурсу
 export const ApiCreatedResponse = (
   description: string,
   type?: Type<unknown> | Function | [Function] | string,
@@ -40,12 +40,12 @@ export const ApiCreatedResponse = (
   );
 };
 
-// Декоратор для ошибок валидации
+// Декоратор для помилок валідації
 export const ApiValidationErrorResponse = () => {
   return applyDecorators(
     ApiResponse({
       status: 400,
-      description: 'Ошибка валидации входных данных',
+      description: 'Помилка валідації вхідних даних',
       schema: {
         type: 'object',
         properties: {
@@ -53,7 +53,7 @@ export const ApiValidationErrorResponse = () => {
           message: {
             type: 'array',
             items: { type: 'string' },
-            example: ['field should not be empty', 'field must be a string'],
+            example: ['поле не повинно бути порожнім', 'поле має бути рядком'],
           },
           error: { type: 'string', example: 'Bad Request' },
         },
@@ -62,12 +62,12 @@ export const ApiValidationErrorResponse = () => {
   );
 };
 
-// Декоратор для ошибок авторизации
+// Декоратор для помилок авторизації
 export const ApiUnauthorizedResponse = () => {
   return applyDecorators(
     ApiResponse({
       status: 401,
-      description: 'Не авторизован',
+      description: 'Не авторизований',
       schema: {
         type: 'object',
         properties: {
@@ -79,12 +79,12 @@ export const ApiUnauthorizedResponse = () => {
   );
 };
 
-// Декоратор для ошибок доступа
+// Декоратор для помилок доступу
 export const ApiForbiddenResponse = () => {
   return applyDecorators(
     ApiResponse({
       status: 403,
-      description: 'Доступ запрещен',
+      description: 'Доступ заборонений',
       schema: {
         type: 'object',
         properties: {
@@ -96,29 +96,29 @@ export const ApiForbiddenResponse = () => {
   );
 };
 
-// Декоратор для ошибок "не найдено"
+// Декоратор для помилок "не знайдено"
 export const ApiNotFoundResponse = (resource = 'Ресурс') => {
   return applyDecorators(
     ApiResponse({
       status: 404,
-      description: `${resource} не найден`,
+      description: `${resource} не знайдено`,
       schema: {
         type: 'object',
         properties: {
           statusCode: { type: 'number', example: 404 },
-          message: { type: 'string', example: `${resource} not found` },
+          message: { type: 'string', example: `${resource} не знайдено` },
         },
       },
     }),
   );
 };
 
-// Декоратор для серверных ошибок
+// Декоратор для серверних помилок
 export const ApiInternalServerErrorResponse = () => {
   return applyDecorators(
     ApiResponse({
       status: 500,
-      description: 'Внутренняя ошибка сервера',
+      description: 'Внутрішня помилка сервера',
       schema: {
         type: 'object',
         properties: {
@@ -130,7 +130,7 @@ export const ApiInternalServerErrorResponse = () => {
   );
 };
 
-// Комбинированный декоратор для защищенных эндпоинтов
+// Комбінований декоратор для захищених ендпоінтів
 export const ApiSecureEndpoint = (summary: string, description?: string, tags?: string[]) => {
   const decorators = [
     ApiOperation({ summary, description }),
@@ -147,10 +147,10 @@ export const ApiSecureEndpoint = (summary: string, description?: string, tags?: 
   return applyDecorators(...decorators);
 };
 
-// Декоратор для публичных эндпоинтов
+// Декоратор для публічних ендпоінтів
 export const ApiPublicEndpoint = (summary: string, description?: string, tags?: string[]) => {
   const decorators = [
-    ApiOperation({ summary, description, security: [] }), // Указываем что не требует аутентификации
+    ApiOperation({ summary, description, security: [] }), // Вказуємо що не потребує аутентифікації
     ApiValidationErrorResponse(),
     ApiInternalServerErrorResponse(),
   ];
@@ -162,7 +162,7 @@ export const ApiPublicEndpoint = (summary: string, description?: string, tags?: 
   return applyDecorators(...decorators);
 };
 
-// Декоратор для эндпоинтов с загрузкой файлов
+// Декоратор для ендпоінтів з завантаженням файлів
 export const ApiFileUpload = (
   summary: string,
   description?: string,
@@ -194,7 +194,7 @@ export const ApiFileUpload = (
   );
 };
 
-// Декоратор для пагинации
+// Декоратор для пагінації
 export const ApiPaginatedResponse = (description: string, dataType: Type<unknown>) => {
   return applyDecorators(
     ApiResponse({
@@ -222,41 +222,41 @@ export const ApiPaginatedResponse = (description: string, dataType: Type<unknown
   );
 };
 
-// Декоратор для параметров пагинации
+// Декоратор для параметрів пагінації
 export const ApiPaginationParams = () => {
   return applyDecorators(
     ApiQuery({
       name: 'page',
       required: false,
       type: Number,
-      description: 'Номер страницы',
+      description: 'Номер сторінки',
       example: 1,
     }),
     ApiQuery({
       name: 'limit',
       required: false,
       type: Number,
-      description: 'Количество элементов на странице',
+      description: 'Кількість елементів на сторінці',
       example: 10,
     }),
   );
 };
 
-// Декоратор для параметров поиска
+// Декоратор для параметрів пошуку
 export const ApiSearchParams = () => {
   return applyDecorators(
     ApiQuery({
       name: 'search',
       required: false,
       type: String,
-      description: 'Поисковый запрос',
-      example: 'example search',
+      description: 'Пошуковий запит',
+      example: 'приклад пошуку',
     }),
     ApiQuery({
       name: 'sort',
       required: false,
       type: String,
-      description: 'Поле для сортировки',
+      description: 'Поле для сортування',
       example: 'createdAt',
     }),
     ApiQuery({
@@ -264,7 +264,7 @@ export const ApiSearchParams = () => {
       required: false,
       type: String,
       enum: ['asc', 'desc'],
-      description: 'Направление сортировки',
+      description: 'Напрямок сортування',
       example: 'desc',
     }),
   );

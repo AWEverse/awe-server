@@ -2,10 +2,10 @@ import { ApiProperty } from '@nestjs/swagger';
 import { IsOptional, IsNumber, Min, Max, IsString, IsEnum } from 'class-validator';
 import { Transform, Type } from 'class-transformer';
 
-// Базовый DTO для пагинации
+// Базовий DTO для пагінації
 export class PaginationDto {
   @ApiProperty({
-    description: 'Номер страницы',
+    description: 'Номер сторінки',
     minimum: 1,
     default: 1,
     example: 1,
@@ -18,7 +18,7 @@ export class PaginationDto {
   page?: number = 1;
 
   @ApiProperty({
-    description: 'Количество элементов на странице',
+    description: 'Кількість елементів на сторінці',
     minimum: 1,
     maximum: 100,
     default: 10,
@@ -33,28 +33,27 @@ export class PaginationDto {
   limit?: number = 10;
 }
 
-// DTO для поиска с пагинацией
+// DTO для пошуку з пагінацією
 export class SearchPaginationDto extends PaginationDto {
   @ApiProperty({
-    description: 'Поисковый запрос',
+    description: 'Пошуковий запит',
     required: false,
-    example: 'example search term',
+    example: 'приклад пошукового терміну',
   })
   @IsOptional()
   @IsString()
   search?: string;
 
   @ApiProperty({
-    description: 'Поле для сортировки',
+    description: 'Поле для сортування',
     required: false,
     example: 'createdAt',
   })
   @IsOptional()
   @IsString()
   sort?: string;
-
   @ApiProperty({
-    description: 'Направление сортировки',
+    description: 'Напрямок сортування',
     enum: ['asc', 'desc'],
     required: false,
     example: 'desc',
@@ -64,22 +63,22 @@ export class SearchPaginationDto extends PaginationDto {
   order?: 'asc' | 'desc' = 'desc';
 }
 
-// Базовый ответ с пагинацией
+// Базова відповідь з пагінацією
 export class PaginatedResponseDto<T> {
   @ApiProperty({
-    description: 'Данные',
+    description: 'Дані',
     isArray: true,
   })
   data: T[];
 
   @ApiProperty({
-    description: 'Метаданные пагинации',
+    description: 'Метадані пагінації',
     type: 'object',
     properties: {
-      total: { type: 'number', description: 'Общее количество элементов' },
-      page: { type: 'number', description: 'Текущая страница' },
-      limit: { type: 'number', description: 'Количество элементов на странице' },
-      pages: { type: 'number', description: 'Общее количество страниц' },
+      total: { type: 'number', description: 'Загальна кількість елементів' },
+      page: { type: 'number', description: 'Поточна сторінка' },
+      limit: { type: 'number', description: 'Кількість елементів на сторінці' },
+      pages: { type: 'number', description: 'Загальна кількість сторінок' },
     },
   })
   meta: {
@@ -90,30 +89,29 @@ export class PaginatedResponseDto<T> {
   };
 }
 
-// Базовый ответ об успехе
+// Базова відповідь про успіх
 export class SuccessResponseDto {
   @ApiProperty({
-    description: 'Статус операции',
+    description: 'Статус операції',
     example: true,
   })
   success: boolean;
-
   @ApiProperty({
-    description: 'Сообщение',
-    example: 'Operation completed successfully',
+    description: 'Повідомлення',
+    example: 'Операція виконана успішно',
   })
   message: string;
 }
 
-// Базовый ответ с данными
+// Базова відповідь з даними
 export class DataResponseDto<T> extends SuccessResponseDto {
   @ApiProperty({
-    description: 'Данные ответа',
+    description: 'Дані відповіді',
   })
   data: T;
 }
 
-// DTO для ошибки
+// DTO для помилки
 export class ErrorResponseDto {
   @ApiProperty({
     description: 'HTTP статус код',
@@ -122,32 +120,32 @@ export class ErrorResponseDto {
   statusCode: number;
 
   @ApiProperty({
-    description: 'Сообщение об ошибке',
+    description: 'Повідомлення про помилку',
     oneOf: [{ type: 'string' }, { type: 'array', items: { type: 'string' } }],
-    example: 'Validation failed',
+    example: 'Помилка валідації',
   })
   message: string | string[];
 
   @ApiProperty({
-    description: 'Тип ошибки',
+    description: 'Тип помилки',
     example: 'Bad Request',
   })
   error: string;
 
   @ApiProperty({
-    description: 'Временная метка',
-    example: '2025-06-13T10:00:00.000Z',
+    description: 'Часова мітка',
+    example: '2025-06-18T10:00:00.000Z',
   })
   timestamp: string;
 
   @ApiProperty({
-    description: 'Путь запроса',
+    description: 'Шлях запиту',
     example: '/api/users',
   })
   path: string;
 }
 
-// DTO для загрузки файла
+// DTO для завантаження файлу
 export class FileUploadDto {
   @ApiProperty({
     type: 'string',
